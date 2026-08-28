@@ -15,6 +15,8 @@
 
 ### 二、快速开始
 
+> **环境要求**：本项目在 `go.mod` 中声明 `toolchain go1.25.13`（已修复标准库 CVE）。Go 1.21+ 会自动下载并使用该工具链；如显式指定，可用 `GOTOOLCHAIN=go1.25.13 go build`。
+
 ```bash
 go mod tidy
 go build ./...
