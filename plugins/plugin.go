@@ -1,4 +1,8 @@
 //go:build ignore
+// +build ignore
+
+
+//go:build ignore
 
 package hrotti
 

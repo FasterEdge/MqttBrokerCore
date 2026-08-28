@@ -1,24 +1,44 @@
-Hrotti
-======
+<div align="center">
+  <img src="Logo.png" alt="MqttBrokerCore" width="120"/>
+  <h2>MqttBrokerCore</h2>
+  <h3>轻量级 MQTT 代理核心（基于 Hrotti）</h3>
+</div>
 
-Hrotti is both a library that provides an MQTT server and a wrapper program around that library that provides a standalone MQTT server.
+### 一、项目简介
+- 使用 Go 实现的 **MQTT 3.1.1 / 5.0 代理核心**（broker library），可作为库集成，也附带独立服务器程序。
+- 支持 **TCP** 与 **WebSocket** 两种监听方式，可同时配置多个监听器。
+- 内置 **QoS 0/1/2** 消息处理、**遗嘱消息**（Will）、**保留消息**（Retained）、**主题通配符**（`+`、`#`）。
+- 提供默认的 **内存持久化**（`MemoryPersistence`），可通过 `Persistence` 接口扩展到 Redis / LevelDB 等外部存储。
+- 内部 `BrokerStats` 记录连接数、吞吐、丢弃等指标，便于对接监控系统。
 
-When used as a library you create a broker with the NewHrotti(maxQueueDepth int) function. This returns a broker with no listeners, the maxQueueDepth option is the number of messages that will be allowed to queue up for a client before any new messages that would be sent to that client are thrown away.
+> 本仓库是对上游 [alsm/hrotti](https://github.com/alsm/hrotti) 的**增强与安全加固**分支，重点补齐了原项目在报文解析、并发与资源控制上的安全隐患。
 
-To add a new listener to the broker you use AddListener(name string, config *ListenerConfig) :) which takes a pointer to a broker as the receiver. name is just a string to identify this listener, config is a pointer to a ListenerConfig currently the only important field in a ListenerConfig is URL which is a [url.URL](http://golang.org/pkg/net/url/#URL)
+### 二、快速开始
 
-To stop a listener use StopListener(name string) which again takes a broker as the receiver, name is the name of the listener as given in AddListener(), it returns a nil error on success, otherwise an error to indicate it could not find the named listener. Calling StopListener() will disconnect all clients currently connected to that listener.
+```bash
+go mod tidy
+go build ./...
 
-Here's a simple example that implements a tcp MQTT server on port 1883
+# 以独立服务器方式启动
+go run . -key mySecret
+
+# 或使用配置文件启动（多监听 / WebSocket）
+go run . -conf config.json
 ```
+
+### 三、作为库集成
+
+以 `MqttBrokerCore` 作为依赖库，创建一个 MQTT 服务器：
+
+```go
 package main
 
 import (
-	"github.com/alsm/hrotti/broker"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
+
+	hrotti "github.com/alsm/hrotti/broker"
 )
 
 func main() {
@@ -33,31 +53,65 @@ func main() {
 }
 ```
 
-A slightly more extensive implementation is provided with this library, running go build in the project directory will produce a binary called hrotti which allows for configuration of multiple listeners with a json config file. If only a single listener is required though you can just set the HROTTI_URL environment variable.
-Only tcp and ws URL schemes are supported, eg: tcp://0.0.0.0:1883 or ws://0.0.0.0:1883/mqtt
-With a websocket URL if no path is specified it will automatically serve on /
+### 四、启动参数
 
-Alternatively a configuration file in json can be provided allowing the creation of multiple listeners, currently all listeners share the same root node in the topic tree. To pass a configuration file use the command line option "-conf", for example;
-```
-hrotti -conf config.json
-```
-The configuration expects an object called "listeners" which is a map of the listener name to a json representation of a ListenerConfig, currently only the url can be specified.
+| 参数      | 默认值 | 说明                                                       |
+|-----------|--------|------------------------------------------------------------|
+| `-key`    |（必填） | 访问密码，用于 HTTP / MQTT 管理接口鉴权                     |
+| `-conf`   |（空）   | JSON 配置文件路径；若为空则使用环境变量 `HROTTI_URL`（单监听）|
+| `-addr`   | `:1883` | 单监听模式下的监听地址（仅在未提供 `-conf` 时生效）           |
+| `-log`    | `stdout`| 日志输出目标：`stdout` / `stderr` / `discard`               |
 
-A listener only listens via tcp or websockets and not both on the same port.
+### 五、配置文件（JSON 示例）
 
-An example configuration file is shown below
-```
+```json
 {
-	"maxQueueDepth": 100,
-	"listeners":{
-		"tcp":{
-			"url":"tcp://0.0.0.0:1883"
-		},
-		"websockets":{
-			"url":"ws://0.0.0.0:2000/mqtt"
-		}
-	}
+  "maxQueueDepth": 100,
+  "listeners": {
+    "tcp": { "url": "tcp://0.0.0.0:1883" },
+    "ws":  { "url": "ws://0.0.0.0:2000/mqtt" }
+  },
+  "logging": {
+    "info": "stdout",
+    "protocol": "discard",
+    "error": "stderr",
+    "debug": "discard"
+  }
 }
 ```
 
-The current persistence mechanism is in memory only.
+- **`maxQueueDepth`**：每个客户端的待发送消息队列大小（默认 100）。
+- **`listeners`**：键名任意，`url` 仅支持 `tcp://` 或 `ws://`（其它 scheme 会被拒绝）。
+- **`logging`**：将 `info` / `protocol` / `error` / `debug` 分别定向到 `stdout`、`stderr` 或 `discard`。
+
+### 六、常见使用场景
+
+| 场景            | 示例                                             | 说明                                       |
+|-----------------|--------------------------------------------------|--------------------------------------------|
+| 单节点本地测试   | `go run . -key test`                             | 默认监听 `0.0.0.0:1883`，使用 `test` 鉴权。 |
+| 多监听 + WebSocket | `go run . -conf config.json`                     | 同时开 TCP 与 WS 监听，共享同一主题树。     |
+| 持久化会话       | `CleanSession=false` 且使用相同 `ClientIdentifier` | 断线重连后保留未确认的 QoS 1/2 消息与订阅。 |
+
+### 七、内部实现概览
+
+- **`Hrotti`**：broker 实例，持有客户端表、订阅树、持久化器与统计对象。
+- **位图订阅存储**：`subscriptionMap.subBitmap` 实现 O(1) 主题匹配，支持 `+` / `#` 通配符。
+- **消息 ID 池**：`messageIDs` 分配 1–65534，耗尽时返回 `ErrMsgIDsExhausted`，避免写入非法 `MessageID=0`。
+- **持久化接口**：`Persistence`（`Init` / `Open` / `Add` / `GetAll` / `Delete` / `Close` / `Exists` / `Replace`）。
+
+### 八、已修复的安全与可靠性问题
+
+| 问题 | 修复 |
+|------|------|
+| `decodeLength` 无限读取字节导致协议失效 / OOM | 限制最多 4 字节并返回错误 |
+| `ReadPacket` 未限制 `RemainingLength`，可分配大内存 | 新增 `MaxRemainingLength`（默认 64 MiB）上限 |
+| 报文体短读未检测，导致协议同步失效 | 引入 `decodeReader` 捕获 truncation 错误 |
+| `WillFlag=0` 时未检查 `WillQoS` / `WillRetain` | 在 `ConnectPacket.Validate` 中拒绝不一致包 |
+| 慢/不再读取的客户端导致发送死锁 | 所有发送改为非阻塞 `select…default` 模式 |
+| `NewListenerConfig` 在 URL 解析失败时返回 nil | 新增 `NewListenerConfigWithError` 并校验 scheme |
+| `getClient` 返回 nil 导致空指针 panic | 在 `FindRetained` / `DeliverMessage` 中加空值保护 |
+| 空 `ClientIdentifier` 且 `CleanSession=0` 未拒绝 | 按 MQTT 规范返回 `CONN_REF_ID_REJ` |
+
+---
+
+> 感谢上游项目 **[alsm/hrotti](https://github.com/alsm/hrotti)** 提供的原始实现与设计思路，本项目在其基础上进行兼容性增强与安全加固。
