@@ -415,9 +415,19 @@ func (c *Client) Send(hrotti *Hrotti) {
 				//Message IDs are not assigned until we're ready to send the message
 				switch msg.(type) {
 				case *SubscribePacket:
-					msg.(*SubscribePacket).MessageID = c.getMsgID(msg.UUID())
+					mid, err := c.getMsgID(msg.UUID())
+					if err != nil {
+						ERROR.Println(c.clientID, "subscribe msgID exhausted, dropping reply:", err)
+						continue
+					}
+					msg.(*SubscribePacket).MessageID = mid
 				case *UnsubscribePacket:
-					msg.(*UnsubscribePacket).MessageID = c.getMsgID(msg.UUID())
+					mid, err := c.getMsgID(msg.UUID())
+					if err != nil {
+						ERROR.Println(c.clientID, "unsubscribe msgID exhausted, dropping reply:", err)
+						continue
+					}
+					msg.(*UnsubscribePacket).MessageID = mid
 				}
 				msg.Write(c.conn)
 			}
@@ -427,7 +437,12 @@ func (c *Client) Send(hrotti *Hrotti) {
 			if ok {
 				switch msg.Details().Qos {
 				case 1, 2:
-					msg.MessageID = c.getMsgID(msg.UUID())
+					mid, err := c.getMsgID(msg.UUID())
+					if err != nil {
+						ERROR.Println(c.clientID, "publish msgID exhausted, dropping:", err)
+						continue
+					}
+					msg.MessageID = mid
 				}
 				msg.Write(c.conn)
 			}
