@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"os"
 
-	. "github.com/alsm/hrotti/broker"
+	. "github.com/FasterEdge/MqttBrokerCore/broker"
 )
 
 type ListenerEntry struct {

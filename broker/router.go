@@ -1,7 +1,7 @@
 package hrotti
 
 import (
-	. "github.com/alsm/hrotti/packets"
+	. "github.com/FasterEdge/MqttBrokerCore/packets"
 	"strings"
 	"sync"
 )
@@ -69,6 +69,12 @@ func match(route []string, topic []string) bool {
 func (h *Hrotti) FindRetained(id string, topic string, qos byte) {
 	var deliverList []*PublishPacket
 	client := h.getClient(id)
+	if client == nil {
+		// Client disconnected between AddSub and FindRetained.
+		// Persist what we can so the next session redelivers.
+		_ = id
+		return
+	}
 	if strings.ContainsAny(topic, "#+") {
 		for rTopic, msg := range h.subs.retained {
 			if match(strings.Split(topic, "/"), strings.Split(rTopic, "/")) {
@@ -202,6 +208,13 @@ func (h *Hrotti) DeliverMessage(topic string, message *PublishPacket) {
 	DEBUG.Println(deliverList)
 	for cid, subQos := range deliverList {
 		client := h.getClient(cid)
+		if client == nil {
+			// Client disappeared between match and delivery; persist for redelivery.
+			if subQos > 0 {
+				h.PersistStore.Add(cid, OUTBOUND, message)
+			}
+			continue
+		}
 		if subQos > 0 {
 			go func(c *Client, subQos byte) {
 				deliveryMessage := message.Copy()

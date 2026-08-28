@@ -1,6 +1,7 @@
 package hrotti
 
 import (
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/url"
@@ -28,12 +29,23 @@ type ListenerConfig struct {
 }
 
 //NewListenerConfig returns a pointer to a ListenerConfig prepared to listen
-//on the URL specified as rawURL
+//on the URL specified as rawURL. The caller MUST check both the returned error
+//and the result: nil ListenerConfig on error. Callers that previously relied on
+//"nil-means-error" still work; new callers should switch to the two-return form.
 func NewListenerConfig(rawURL string) *ListenerConfig {
+	lc, _ := NewListenerConfigWithError(rawURL)
+	return lc
+}
+
+// NewListenerConfigWithError is the safer two-return constructor. It returns
+// a non-nil error when rawURL cannot be parsed as a URL.
+func NewListenerConfigWithError(rawURL string) (*ListenerConfig, error) {
 	listenerURL, err := url.Parse(rawURL)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	l := &ListenerConfig{URL: listenerURL}
-	return l
+	if listenerURL.Scheme != "tcp" && listenerURL.Scheme != "ws" {
+		return nil, &url.Error{Op: "parse", URL: rawURL, Err: fmt.Errorf("unsupported listener scheme %q (only tcp and ws)", listenerURL.Scheme)}
+	}
+	return &ListenerConfig{URL: listenerURL}, nil
 }

@@ -1,7 +1,7 @@
 package hrotti
 
 import (
-	. "github.com/alsm/hrotti/packets"
+	. "github.com/FasterEdge/MqttBrokerCore/packets"
 	"github.com/google/uuid"
 	"sync"
 )

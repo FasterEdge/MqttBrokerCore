@@ -1,6 +1,7 @@
 package hrotti
 
 import (
+	"errors"
 	"github.com/google/uuid"
 	"sync"
 )
@@ -36,16 +37,21 @@ const (
 	}
 }*/
 
-func (m *messageIDs) getMsgID(id uuid.UUID) uint16 {
+// ErrMsgIDsExhausted is returned when the in-use 1..65534 message-id pool is
+// exhausted. Callers must wait for in-flight messages to be acknowledged
+// before sending further QoS1/QoS2 messages.
+var ErrMsgIDsExhausted = errors.New("message ids exhausted")
+
+func (m *messageIDs) getMsgID(id uuid.UUID) (uint16, error) {
 	m.Lock()
 	defer m.Unlock()
 	for i := msgIDMin; i < msgIDMax; i++ {
 		if m.index[i] == nil {
 			m.index[i] = &id
-			return i
+			return i, nil
 		}
 	}
-	return 0
+	return 0, ErrMsgIDsExhausted
 }
 
 func (m *messageIDs) inUse(id uint16) bool {

@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	. "github.com/alsm/hrotti/broker"
+	. "github.com/FasterEdge/MqttBrokerCore/broker"
 )
 
 func createConfig() BrokerConfig {

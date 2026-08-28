@@ -81,7 +81,9 @@ func ReadPacket(r io.Reader) (cp ControlPacket, err error) {
 	if err != nil {
 		return nil, err
 	}
-	fh.unpack(b[0], r)
+	if err := fh.unpack(b[0], r); err != nil {
+		return nil, err
+	}
 	cp = NewControlPacketWithHeader(fh)
 	if cp == nil {
 		return nil, errors.New("Bad data from client")
@@ -91,7 +93,14 @@ func ReadPacket(r io.Reader) (cp ControlPacket, err error) {
 	if err != nil {
 		return nil, err
 	}
-	cp.Unpack(bytes.NewBuffer(packetBytes))
+	// decodeReader tracks short reads so that a malformed/truncated body
+	// (a field claiming more bytes than remain) is reported as an error
+	// instead of silently producing zero-padded fields (protocol desync).
+	d := &decodeReader{r: bytes.NewBuffer(packetBytes)}
+	cp.Unpack(d)
+	if d.err != nil {
+		return nil, d.err
+	}
 	return cp, nil
 }
 
@@ -200,12 +209,39 @@ func (fh *FixedHeader) pack() bytes.Buffer {
 	return header
 }
 
-func (fh *FixedHeader) unpack(typeAndFlags byte, r io.Reader) {
+func (fh *FixedHeader) unpack(typeAndFlags byte, r io.Reader) error {
 	fh.MessageType = typeAndFlags >> 4
 	fh.Dup = (typeAndFlags>>3)&0x01 > 0
 	fh.Qos = (typeAndFlags >> 1) & 0x03
 	fh.Retain = typeAndFlags&0x01 > 0
-	fh.RemainingLength = decodeLength(r)
+	rl, err := decodeLength(r)
+	if err != nil {
+		return err
+	}
+	fh.RemainingLength = rl
+	return nil
+}
+
+// decodeReader wraps the fixed-size packet body and records the first
+// read-shortage error. Passing it to an Unpack method lets the shared decode
+// helpers signal truncation without changing the ControlPacket interface.
+type decodeReader struct {
+	r   io.Reader
+	err error
+}
+
+// Read implements io.Reader and stores any short-read/EOF error so callers
+// can detect that a length-prefixed field overran the declared packet body.
+func (d *decodeReader) Read(p []byte) (int, error) {
+	n, err := io.ReadFull(d.r, p)
+	if err != nil && d.err == nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			d.err = errors.New("packet body truncated")
+		} else {
+			d.err = err
+		}
+	}
+	return n, err
 }
 
 func decodeByte(b io.Reader) byte {
@@ -268,18 +304,33 @@ func encodeLength(length int) []byte {
 	return encLength
 }
 
-func decodeLength(r io.Reader) int {
+// MaxRemainingLength caps a single MQTT packet's body size. MQTT 3.1.1 allows
+// up to 268,435,455 bytes (28-bit), but accepting that from an unauthenticated peer
+// enables a trivial memory-exhaustion DoS (one CONNECT can ask for a 256MB allocation).
+// The cap is configurable via SetMaxRemainingLength if higher limits are needed.
+var MaxRemainingLength int32 = 1 << 26 // 64MiB
+
+// decodeRemainingLength parses the variable-length encoding from r.
+// Returns -1 and a non-nil error on truncation, on encodings longer than the MQTT
+// mandated 4 bytes, or on values exceeding MaxRemainingLength.
+func decodeLength(r io.Reader) (int, error) {
 	var rLength uint32
-	var multiplier uint32 = 0
+	var multiplier uint32
 	b := make([]byte, 1)
-	for {
-		io.ReadFull(r, b)
+	for i := 0; i < 4; i++ {
+		if _, err := io.ReadFull(r, b); err != nil {
+			return -1, err
+		}
 		digit := b[0]
 		rLength |= uint32(digit&127) << multiplier
 		if (digit & 128) == 0 {
-			break
+			if rLength > uint32(MaxRemainingLength) {
+				return -1, errors.New("packet remaining length exceeds cap")
+			}
+			return int(rLength), nil
 		}
 		multiplier += 7
 	}
-	return int(rLength)
+	// MQTT 3.1.1 §2.2.3: continuation bit set on byte 5 is a protocol error.
+	return -1, errors.New("invalid remaining length encoding (too many bytes)")
 }

@@ -92,6 +92,17 @@ func (c *ConnectPacket) Validate() byte {
 	if c.PasswordFlag && !c.UsernameFlag {
 		return CONN_REF_BAD_USER_PASS
 	}
+	// MQTT 3.1.1 §3.1.2.3: if WillFlag is 0, WillQoS MUST be 0 and WillRetain MUST be 0.
+	if !c.WillFlag {
+		if c.WillQos != 0 {
+			fmt.Println("Will flag not set but WillQoS non-zero")
+			return CONN_PROTOCOL_VIOLATION
+		}
+		if c.WillRetain {
+			fmt.Println("Will flag not set but WillRetain true")
+			return CONN_PROTOCOL_VIOLATION
+		}
+	}
 	if c.ReservedBit != 0 {
 		fmt.Println("Bad reserved bit")
 		return CONN_PROTOCOL_VIOLATION

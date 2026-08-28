@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"sync"
 
-	. "github.com/alsm/hrotti/packets"
+	. "github.com/FasterEdge/MqttBrokerCore/packets"
 	"github.com/google/uuid"
 	"golang.org/x/net/websocket"
 )
@@ -167,8 +167,18 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 	cp := newControlPacket(CONNECT).(*connectPacket)
 	cp.fixedHeader = cph
 	cp.unpack(body)*/
-	rp, _ := ReadPacket(conn)
-	cp := rp.(*ConnectPacket)
+	rp, err := ReadPacket(conn)
+	if err != nil || rp == nil {
+		ERROR.Println("Failed to read CONNECT from", conn.RemoteAddr(), err)
+		conn.Close()
+		return
+	}
+	cp, ok := rp.(*ConnectPacket)
+	if !ok {
+		ERROR.Println("First packet from", conn.RemoteAddr(), "is not a CONNECT")
+		conn.Close()
+		return
+	}
 
 	//Validate the CONNECT, check fields, values etc.
 	rc := cp.Validate()
@@ -191,8 +201,17 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 	}
 
 	//check for a zero length client id and if it exists create one from the UUID library and return
-	//it on $SYS/session_identifier
+	//it on $SYS/session_identifier. MQTT 3.1.1 §3.1.3.1: when ClientIdentifier is empty the
+	//client MUST set CleanSession=1; otherwise the server MUST reject.
 	if len(cp.ClientIdentifier) == 0 {
+		if !cp.CleanSession {
+			ERROR.Println("Rejecting empty ClientID with CleanSession=0 from", conn.RemoteAddr())
+			ca := NewControlPacket(CONNACK).(*ConnackPacket)
+			ca.ReturnCode = CONN_REF_ID_REJ
+			_ = ca.Write(conn)
+			conn.Close()
+			return
+		}
 		cp.ClientIdentifier = uuid.New().String()
 		sendSessionID = true
 	}
@@ -232,7 +251,11 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 				sessionIDPacket.TopicName = "$SYS/session_identifier"
 				sessionIDPacket.Payload = []byte(cp.ClientIdentifier)
 				sessionIDPacket.Qos = 1
-				c.outboundMessages <- sessionIDPacket
+				// Non-blocking: drop if the queue is full; client will see the ID via CONNACK path if needed.
+				select {
+				case c.outboundMessages <- sessionIDPacket:
+				default:
+				}
 			}()
 		}
 		//As before this function has to remain running but to avoid races we want to make sure its finished

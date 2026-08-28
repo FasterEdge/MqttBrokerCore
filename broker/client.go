@@ -2,7 +2,7 @@ package hrotti
 
 import (
 	//"errors"
-	. "github.com/alsm/hrotti/packets"
+	. "github.com/FasterEdge/MqttBrokerCore/packets"
 	"github.com/google/uuid"
 	//"io"
 	"net"
@@ -11,7 +11,7 @@ import (
 	// Plugins currently don't work (they create a cycle). We could break the cycle
 	// by fudging things through main.go, but I think the real solution is to use RPC
 	// and run plugins in a separate process
-	// . "github.com/alsm/hrotti/plugins"
+	// . "github.com/FasterEdge/MqttBrokerCore/plugins"
 )
 
 type Client struct {
@@ -163,10 +163,18 @@ func (c *Client) Start(cp *ConnectPacket, hrotti *Hrotti) {
 				if msg.(*PublishPacket).Qos > 0 {
 					msg.(*PublishPacket).Dup = true
 				}
-				c.outboundMessages <- msg.(*PublishPacket)
+				// Non-blocking: drop if the outbound queue is full rather than hang Start.
+				select {
+				case c.outboundMessages <- msg.(*PublishPacket):
+				default:
+				}
 			//If it's something else like a PUBACK etc send it to the priority outbound channel
 			default:
-				c.outboundPriority <- msg
+				// Non-blocking priority send; drop on full.
+				select {
+				case c.outboundPriority <- msg:
+				default:
+				}
 			}
 		}
 	}
@@ -347,7 +355,11 @@ func (c *Client) Receive(hrotti *Hrotti) {
 				sa := NewControlPacket(SUBACK).(*SubackPacket)
 				sa.MessageID = sp.MessageID
 				sa.GrantedQoss = append(sa.GrantedQoss, rQos...)
-				c.outboundPriority <- sa
+				// Non-blocking: a stalled client must not wedge the receive goroutine.
+				select {
+				case c.outboundPriority <- sa:
+				default:
+				}
 			//The client wants to unsubscribe from a topic.
 			case *UnsubscribePacket:
 				PROTOCOL.Println("Received UNSUBSCRIBE from", c.clientID)
@@ -355,12 +367,18 @@ func (c *Client) Receive(hrotti *Hrotti) {
 				hrotti.RemoveSubscription(c, up.Topics[0])
 				ua := NewControlPacket(UNSUBACK).(*UnsubackPacket)
 				ua.MessageID = up.MessageID
-				c.outboundPriority <- ua
+				select {
+				case c.outboundPriority <- ua:
+				default:
+				}
 			//As part of the keepalive if the client doesn't have any messages to send us for as long as the
 			//keepalive period it will send a ping request, so we send a ping response back
 			case *PingreqPacket:
 				presp := NewControlPacket(PINGRESP).(*PingrespPacket)
-				c.outboundPriority <- presp
+				select {
+				case c.outboundPriority <- presp:
+				default:
+				}
 			}
 		}
 	}
