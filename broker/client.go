@@ -8,10 +8,9 @@ import (
 	"net"
 	"sync"
 	"time"
-	// Plugins currently don't work (they create a cycle). We could break the cycle
-	// by fudging things through main.go, but I think the real solution is to use RPC
-	// and run plugins in a separate process
-	// . "github.com/FasterEdge/MqttBrokerCore/plugins"
+	// Plugins currently don't work (they create a cycle); the plugins package has
+	// been removed. If a plugin system is ever re-added it should run in a separate
+	// process (e.g. over RPC) to break the import cycle.
 )
 
 type Client struct {
