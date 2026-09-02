@@ -1,3 +1,4 @@
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 package hrotti
 
 //Add a subscription for a client, taking an array of topics to subscribe to and an associated
