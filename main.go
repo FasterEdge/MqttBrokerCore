@@ -11,6 +11,18 @@ import (
 	. "github.com/FasterEdge/MqttBrokerCore/broker"
 )
 
+// resolveListener returns a listener for the HROTTI_URL environment variable,
+// falling back to the default tcp://0.0.0.0:1883 when the env var is empty or
+// unparsable. NewListenerConfig returns nil for empty/invalid URLs, so callers
+// must nil-check before dereferencing (see main).
+func resolveListener() *ListenerConfig {
+	listener := NewListenerConfig(os.Getenv("HROTTI_URL"))
+	if listener == nil || listener.URL.Host == "" {
+		listener = NewListenerConfig("tcp://0.0.0.0:1883")
+	}
+	return listener
+}
+
 func createConfig() BrokerConfig {
 	configFile := flag.String("conf", "", "A configuration file")
 
@@ -21,11 +33,7 @@ func createConfig() BrokerConfig {
 	config.Listeners = make(map[string]*ListenerConfig)
 
 	if *configFile == "" {
-		listener := NewListenerConfig(os.Getenv("HROTTI_URL"))
-		if listener.URL.Host == "" {
-			listener = NewListenerConfig("tcp://0.0.0.0:1883")
-		}
-		config.Listeners["envconfig"] = listener
+		config.Listeners["envconfig"] = resolveListener()
 		config.MaxQueueDepth = 100
 	} else {
 		fmt.Println("Reading config file", *configFile)
