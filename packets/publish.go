@@ -55,6 +55,13 @@ func (p *PublishPacket) Unpack(b io.Reader) {
 	} else {
 		payloadLength -= len(p.TopicName) + 2
 	}
+	// 恶意/损坏帧可声明 topic 长度超出实际剩余 body: decodeString 返回全零
+	// topic (len=N) 后 payloadLength 变负, make([]byte, 负数) 直接 panic,
+	// 未认证客户端可借此远程打崩 broker。截断本身已由 decodeReader 记录,
+	// ReadPacket 会以错误拒绝; 这里 clamp 到 0 防止 panic。
+	if payloadLength < 0 {
+		payloadLength = 0
+	}
 	p.Payload = make([]byte, payloadLength)
 	b.Read(p.Payload)
 }
