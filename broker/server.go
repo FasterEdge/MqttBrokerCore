@@ -140,11 +140,18 @@ func (h *Hrotti) StopListener(name string) error {
 
 func (h *Hrotti) Stop() {
 	INFO.Println("Exiting...")
-	h.listenersMu.RLock()
+	// 与 StopListener 互斥: 两者都会 close(listener.stop), 并发调用会对
+	// 同一 listener 双 close 触发 panic。写锁 + 锁内清空 map 保证每个
+	// stop channel 恰好 close 一次; 重复调用 Stop 遍历空 map 为安全 no-op。
+	h.listenersMu.Lock()
 	for _, listener := range h.listeners {
 		close(listener.stop)
+		for _, conn := range listener.connections {
+			conn.Close()
+		}
 	}
-	h.listenersMu.RUnlock()
+	h.listeners = make(map[string]*internalListener)
+	h.listenersMu.Unlock()
 	h.listenersWaitGroup.Wait()
 }
 
