@@ -32,8 +32,9 @@ func newSubMap() *subscriptionMap {
 
 func (s *subscriptionMap) SetRetained(topic string, message *PublishPacket) {
 	DEBUG.Println("Setting retained message for", topic)
-	s.RLock()
-	defer s.RUnlock()
+	// 写 map 必须持写锁: RLock 允许多个写者并发进入, 对 map 的写是数据竞争
+	s.Lock()
+	defer s.Unlock()
 	if len(message.Payload) == 0 {
 		delete(s.retained, topic)
 	} else {
@@ -77,6 +78,8 @@ func (h *Hrotti) FindRetained(id string, topic string, qos byte) {
 		return
 	}
 	if strings.ContainsAny(topic, "#+") {
+		// 遍历 retained map 需持读锁 (SetRetained 写方持写锁)
+		h.subs.RLock()
 		for rTopic, msg := range h.subs.retained {
 			if match(strings.Split(topic, "/"), strings.Split(rTopic, "/")) {
 				deliveryMsg := msg.Copy()
@@ -84,8 +87,12 @@ func (h *Hrotti) FindRetained(id string, topic string, qos byte) {
 				deliverList = append(deliverList, deliveryMsg)
 			}
 		}
+		h.subs.RUnlock()
 	} else {
-		if msg, ok := h.subs.retained[topic]; ok {
+		h.subs.RLock()
+		msg, ok := h.subs.retained[topic]
+		h.subs.RUnlock()
+		if ok {
 			deliveryMsg := msg.Copy()
 			deliveryMsg.Qos = calcMinQos(msg.Qos, qos)
 			deliverList = append(deliverList, deliveryMsg)
@@ -191,11 +198,8 @@ func (h *Hrotti) DeliverMessage(topic string, message *PublishPacket) {
 			break
 		}
 	}
-	h.subs.RUnlock()
 
-	zeroCopy := message.Copy()
-	zeroCopy.Qos = 0
-
+	// 在锁内完成 subMap 读取: 锁外读取与 AddSub/DeleteSub 的写并发构成数据竞争
 	for _, sub := range append(hashMatches, matches...) {
 		for c, qos := range h.subs.subMap[sub] {
 			if currQos, ok := deliverList[c]; ok {
@@ -205,6 +209,10 @@ func (h *Hrotti) DeliverMessage(topic string, message *PublishPacket) {
 			}
 		}
 	}
+	h.subs.RUnlock()
+
+	zeroCopy := message.Copy()
+	zeroCopy.Qos = 0
 
 	DEBUG.Println(deliverList)
 	for cid, subQos := range deliverList {

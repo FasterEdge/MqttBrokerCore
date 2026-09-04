@@ -16,6 +16,7 @@ import (
 type Hrotti struct {
 	PersistStore       Persistence
 	listeners          map[string]*internalListener
+	listenersMu        sync.RWMutex
 	listenersWaitGroup sync.WaitGroup
 	maxQueueDepth      int
 	clients            *clients
@@ -53,7 +54,9 @@ func (h *Hrotti) AddListener(name string, config *ListenerConfig) error {
 	listener := &internalListener{name: name, url: *config.URL}
 	listener.stop = make(chan struct{})
 
+	h.listenersMu.Lock()
 	h.listeners[name] = listener
+	h.listenersMu.Unlock()
 
 	ln, err := net.Listen("tcp", listener.url.Host)
 	if err != nil {
@@ -122,6 +125,8 @@ func (h *Hrotti) AddListener(name string, config *ListenerConfig) error {
 }
 
 func (h *Hrotti) StopListener(name string) error {
+	h.listenersMu.Lock()
+	defer h.listenersMu.Unlock()
 	if listener, ok := h.listeners[name]; ok {
 		close(listener.stop)
 		for _, conn := range listener.connections {
@@ -135,9 +140,11 @@ func (h *Hrotti) StopListener(name string) error {
 
 func (h *Hrotti) Stop() {
 	INFO.Println("Exiting...")
+	h.listenersMu.RLock()
 	for _, listener := range h.listeners {
 		close(listener.stop)
 	}
+	h.listenersMu.RUnlock()
 	h.listenersWaitGroup.Wait()
 }
 
