@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	. "github.com/FasterEdge/MqttBrokerCore/packets"
 	"github.com/google/uuid"
@@ -99,7 +100,10 @@ func (h *Hrotti) AddListener(name string, config *ListenerConfig) error {
 		//for each one.
 		go func(ln net.Listener) {
 			defer h.listenersWaitGroup.Done()
-			err := http.Serve(ln, nil)
+			// 仅设 ReadHeaderTimeout: WebSocket 连接是长连接, 不能设 Read/Write 总超时,
+			// 但握手阶段需要防御慢速头注入(slowloris)占用连接与 goroutine。
+			srv := &http.Server{Handler: nil, ReadHeaderTimeout: 10 * time.Second}
+			err := srv.Serve(ln)
 			if err != nil {
 				ERROR.Println(err.Error())
 				return
