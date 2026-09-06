@@ -7,7 +7,7 @@ package hrotti
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/url"
 )
@@ -20,12 +20,12 @@ var (
 	DEBUG    *log.Logger
 )
 
-//The default output for all the loggers is set to ioutil.Discard
+//The default output for all the loggers is set to io.Discard
 func init() {
-	INFO = log.New(ioutil.Discard, "", 0)
-	PROTOCOL = log.New(ioutil.Discard, "", 0)
-	ERROR = log.New(ioutil.Discard, "", 0)
-	DEBUG = log.New(ioutil.Discard, "", 0)
+	INFO = log.New(io.Discard, "", 0)
+	PROTOCOL = log.New(io.Discard, "", 0)
+	ERROR = log.New(io.Discard, "", 0)
+	DEBUG = log.New(io.Discard, "", 0)
 }
 
 //ListenerConfig is a struct containing a URL
