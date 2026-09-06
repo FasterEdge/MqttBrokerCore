@@ -12,7 +12,7 @@ import (
 	"net/url"
 )
 
-//loggers
+// loggers
 var (
 	INFO     *log.Logger
 	PROTOCOL *log.Logger
@@ -20,7 +20,7 @@ var (
 	DEBUG    *log.Logger
 )
 
-//The default output for all the loggers is set to io.Discard
+// The default output for all the loggers is set to io.Discard
 func init() {
 	INFO = log.New(io.Discard, "", 0)
 	PROTOCOL = log.New(io.Discard, "", 0)
@@ -28,15 +28,15 @@ func init() {
 	DEBUG = log.New(io.Discard, "", 0)
 }
 
-//ListenerConfig is a struct containing a URL
+// ListenerConfig is a struct containing a URL
 type ListenerConfig struct {
 	URL *url.URL
 }
 
-//NewListenerConfig returns a pointer to a ListenerConfig prepared to listen
-//on the URL specified as rawURL. The caller MUST check both the returned error
-//and the result: nil ListenerConfig on error. Callers that previously relied on
-//"nil-means-error" still work; new callers should switch to the two-return form.
+// NewListenerConfig returns a pointer to a ListenerConfig prepared to listen
+// on the URL specified as rawURL. The caller MUST check both the returned error
+// and the result: nil ListenerConfig on error. Callers that previously relied on
+// "nil-means-error" still work; new callers should switch to the two-return form.
 func NewListenerConfig(rawURL string) *ListenerConfig {
 	lc, _ := NewListenerConfigWithError(rawURL)
 	return lc

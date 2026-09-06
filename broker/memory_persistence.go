@@ -7,14 +7,14 @@ import (
 	"sync"
 )
 
-//a persistence entry is a map of msgIds and ControlPackets
+// a persistence entry is a map of msgIds and ControlPackets
 type MemoryPersistenceEntry struct {
 	sync.Mutex
 	messages map[string]ControlPacket
 }
 
-//the MemoryPersistence struct is a map of client pointers to pointers
-//to a Persistence Entry. So each client has its own map of msgIds/packets.
+// the MemoryPersistence struct is a map of client pointers to pointers
+// to a Persistence Entry. So each client has its own map of msgIds/packets.
 type MemoryPersistence struct {
 	sync.RWMutex
 	inbound  map[string]*MemoryPersistenceEntry

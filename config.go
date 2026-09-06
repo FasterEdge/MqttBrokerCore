@@ -15,8 +15,8 @@ type ListenerEntry struct {
 	URL string `json:"url"`
 }
 
-//Current configuration struct, maxQueueDepth sets the maximum number of unacknowledged mesages
-//for a client. Listeners is a slice of ListenerConfigs
+// Current configuration struct, maxQueueDepth sets the maximum number of unacknowledged mesages
+// for a client. Listeners is a slice of ListenerConfigs
 type BrokerConfig struct {
 	MaxQueueDepth   int                       `json:"maxQueueDepth"`
 	ListenerEntries map[string]*ListenerEntry `json:"listeners"`
