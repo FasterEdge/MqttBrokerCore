@@ -27,6 +27,7 @@ type Hrotti struct {
 type internalListener struct {
 	name        string
 	url         url.URL
+	mu          sync.Mutex // 保护 connections(多连接并发 append 是数据竞争)
 	connections []net.Conn
 	stop        chan struct{}
 }
@@ -90,7 +91,9 @@ func (h *Hrotti) AddListener(name string, config *ListenerConfig) error {
 		server.Handler = func(ws *websocket.Conn) {
 			ws.PayloadType = websocket.BinaryFrame
 			INFO.Println("New incoming websocket connection", ws.RemoteAddr())
+			listener.mu.Lock()
 			listener.connections = append(listener.connections, ws)
+			listener.mu.Unlock()
 			h.InitClient(ws)
 		}
 		//set the path that the http server will recognise as related to this websocket
@@ -120,7 +123,9 @@ func (h *Hrotti) AddListener(name string, config *ListenerConfig) error {
 					return
 				}
 				INFO.Println("New incoming connection", conn.RemoteAddr())
+				listener.mu.Lock()
 				listener.connections = append(listener.connections, conn)
+				listener.mu.Unlock()
 				go h.InitClient(conn)
 			}
 		}()
@@ -133,7 +138,10 @@ func (h *Hrotti) StopListener(name string) error {
 	defer h.listenersMu.Unlock()
 	if listener, ok := h.listeners[name]; ok {
 		close(listener.stop)
-		for _, conn := range listener.connections {
+		listener.mu.Lock()
+		conns := append([]net.Conn(nil), listener.connections...)
+		listener.mu.Unlock()
+		for _, conn := range conns {
 			conn.Close()
 		}
 		delete(h.listeners, name)
@@ -150,7 +158,10 @@ func (h *Hrotti) Stop() {
 	h.listenersMu.Lock()
 	for _, listener := range h.listeners {
 		close(listener.stop)
-		for _, conn := range listener.connections {
+		listener.mu.Lock()
+		conns := append([]net.Conn(nil), listener.connections...)
+		listener.mu.Unlock()
+		for _, conn := range conns {
 			conn.Close()
 		}
 	}
