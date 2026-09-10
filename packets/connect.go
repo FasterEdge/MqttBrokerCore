@@ -97,6 +97,12 @@ func (c *ConnectPacket) Validate() byte {
 	if c.PasswordFlag && !c.UsernameFlag {
 		return CONN_REF_BAD_USER_PASS
 	}
+	// MQTT 3.1.1 §3.1.2.10: Will QoS 值 3 是保留值, 必须按协议违规拒绝
+	// (旧实现接受 WillQos=3, 后续 Will 消息按非法 QoS 处理)。
+	if c.WillQos > 2 {
+		fmt.Println("Will QoS reserved value 3")
+		return CONN_PROTOCOL_VIOLATION
+	}
 	// MQTT 3.1.1 §3.1.2.3: if WillFlag is 0, WillQoS MUST be 0 and WillRetain MUST be 0.
 	if !c.WillFlag {
 		if c.WillQos != 0 {
