@@ -391,7 +391,19 @@ func (c *Client) Receive(hrotti *Hrotti) {
 func (c *Client) HandleFlow(msg ControlPacket, hrotti *Hrotti) {
 	switch msg.(type) {
 	case *PubrelPacket:
-		hrotti.PersistStore.Replace(c.clientID, OUTBOUND, msg)
+		// QoS2 完成清理: PUBREL.MessageID 是发送时分配的(见 Send 内 getMsgID),
+		// 经 messageIDs.index 反查原 outbound PUBLISH 的 uuid 精确删除持久化,
+		// 并释放消息 ID。旧实现 Replace(新 uuid)既不替换也不删除, outbound
+		// 残留使重连时重发已确认消息(QoS2 精确一次降级为至少一次)。
+		if pr, ok := msg.(*PubrelPacket); ok && pr.MessageID > 0 {
+			c.messageIDs.RLock()
+			uid := c.messageIDs.index[pr.MessageID]
+			c.messageIDs.RUnlock()
+			if uid != nil {
+				hrotti.PersistStore.Delete(c.clientID, OUTBOUND, *uid)
+				c.messageIDs.freeID(pr.MessageID)
+			}
+		}
 	case *PubackPacket, *PubcompPacket:
 		hrotti.PersistStore.Delete(c.clientID, INBOUND, msg.UUID())
 	}
