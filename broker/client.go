@@ -21,6 +21,11 @@ import (
 type Client struct {
 	sync.WaitGroup
 	messageIDs
+	// inboundMessageIDs 是客户端→服务端方向(INBOUND)的 MessageID→uuid 反查表:
+	// 客户端 PUBLISH QoS>0 的 MessageID 由客户端分配, 服务端在收到 PUBACK/PUBCOMP
+	// 时需按该 MessageID 精确删除 INBOUND 持久化的原始 PUBLISH(旧实现用回包自身
+	// uuid 删除 → 永不命中 → INBOUND 无限累积泄漏)。
+	inboundMessageIDs messageIDs
 	clientID         string
 	conn             net.Conn
 	keepAlive        uint16
@@ -47,6 +52,9 @@ func newClient(conn net.Conn, clientID string, maxQDepth int) *Client {
 		stopOnce:         new(sync.Once),
 		messageIDs: messageIDs{
 			//idChan: make(chan uint16, 10),
+			index: make(map[uint16]*uuid.UUID),
+		},
+		inboundMessageIDs: messageIDs{
 			index: make(map[uint16]*uuid.UUID),
 		},
 	}
@@ -325,6 +333,9 @@ func (c *Client) Receive(hrotti *Hrotti) {
 				PROTOCOL.Println("Received PUBLISH from", c.clientID, pp.TopicName)
 				if pp.Qos > 0 {
 					hrotti.PersistStore.Add(c.clientID, INBOUND, pp)
+					// 记录客户端 MessageID→uuid 反查, 供 PUBACK/PUBCOMP 时精确
+					// 删除 INBOUND(否则按回包 uuid 删永不命中 → INBOUND 泄漏)。
+					c.inboundMessageIDs.setID(pp.MessageID, pp.UUID())
 				}
 				//if this message has the retained flag set then set as the retained message for the
 				//appropriate node in the topic tree
@@ -350,7 +361,14 @@ func (c *Client) Receive(hrotti *Hrotti) {
 				//Check that we also think this message id is in use, if it is remove the original
 				//PUBLISH from the outbound persistence store and set the message id as free for reuse
 				if c.inUse(pa.MessageID) {
-					hrotti.PersistStore.Delete(c.clientID, OUTBOUND, pa.UUID())
+					// 用 MessageID 反查原始 outbound PUBLISH 的 uuid 精确删除
+					// (旧实现用 PUBACK 自身 uuid 删 → 永不命中 → OUTBOUND 泄漏)。
+					c.messageIDs.RLock()
+					uid := c.messageIDs.index[pa.MessageID]
+					c.messageIDs.RUnlock()
+					if uid != nil {
+						hrotti.PersistStore.Delete(c.clientID, OUTBOUND, *uid)
+					}
 					c.freeID(pa.MessageID)
 				} else {
 					ERROR.Println("Received a PUBACK for unknown msgid", pa.MessageID, "from", c.clientID)
@@ -381,7 +399,14 @@ func (c *Client) Receive(hrotti *Hrotti) {
 			case *PubcompPacket:
 				pc := cp.(*PubcompPacket)
 				if c.inUse(pc.MessageID) {
-					//hrotti.PersistStore.Delete(c, OUTBOUND, pc.UUID)
+					// QoS2 完成: 按 MessageID 反查原始 outbound PUBLISH 的 uuid
+					// 精确删除并释放 msgid(旧实现只 freeID 不删除 → OUTBOUND 泄漏)。
+					c.messageIDs.RLock()
+					uid := c.messageIDs.index[pc.MessageID]
+					c.messageIDs.RUnlock()
+					if uid != nil {
+						hrotti.PersistStore.Delete(c.clientID, OUTBOUND, *uid)
+					}
 					c.freeID(pc.MessageID)
 				} else {
 					ERROR.Println("Received a PUBCOMP for unknown msgid", pc.MessageID, "from", c.clientID)
@@ -445,23 +470,26 @@ func (c *Client) Receive(hrotti *Hrotti) {
 }
 
 func (c *Client) HandleFlow(msg ControlPacket, hrotti *Hrotti) {
-	switch msg.(type) {
-	case *PubrelPacket:
-		// QoS2 完成清理: PUBREL.MessageID 是发送时分配的(见 Send 内 getMsgID),
-		// 经 messageIDs.index 反查原 outbound PUBLISH 的 uuid 精确删除持久化,
-		// 并释放消息 ID。旧实现 Replace(新 uuid)既不替换也不删除, outbound
-		// 残留使重连时重发已确认消息(QoS2 精确一次降级为至少一次)。
-		if pr, ok := msg.(*PubrelPacket); ok && pr.MessageID > 0 {
-			c.messageIDs.RLock()
-			uid := c.messageIDs.index[pr.MessageID]
-			c.messageIDs.RUnlock()
-			if uid != nil {
-				hrotti.PersistStore.Delete(c.clientID, OUTBOUND, *uid)
-				c.messageIDs.freeID(pr.MessageID)
-			}
+	// 方向2(客户端→服务端)QoS 完成清理: PUBACK(确认客户端 QoS1 PUBLISH)与
+	// PUBCOMP(确认客户端 QoS2 PUBREL)时按客户端分配的 MessageID 反查 INBOUND
+	// 原始 PUBLISH 的 uuid 精确删除。旧实现用回包自身 uuid 删 → 永不命中 →
+	// INBOUND 无限累积泄漏。方向1(服务端→客户端)OUTBOUND 的删除已移到
+	// PUBACK/PUBCOMP 接收处理处(messageIDs.index 反查)。
+	var mid uint16
+	switch m := msg.(type) {
+	case *PubackPacket:
+		mid = m.MessageID
+	case *PubcompPacket:
+		mid = m.MessageID
+	}
+	if mid > 0 {
+		c.inboundMessageIDs.RLock()
+		uid := c.inboundMessageIDs.index[mid]
+		c.inboundMessageIDs.RUnlock()
+		if uid != nil {
+			hrotti.PersistStore.Delete(c.clientID, INBOUND, *uid)
+			c.inboundMessageIDs.freeID(mid)
 		}
-	case *PubackPacket, *PubcompPacket:
-		hrotti.PersistStore.Delete(c.clientID, INBOUND, msg.UUID())
 	}
 	//send to channel if open, silently drop if channel closed
 	select {

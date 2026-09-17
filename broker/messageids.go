@@ -66,3 +66,11 @@ func (m *messageIDs) freeID(id uint16) {
 	defer m.Unlock()
 	m.index[id] = nil
 }
+
+// setID 记录某个 MessageID 对应的消息 uuid(用于 INBOUND 方向: 客户端分配的
+// MessageID → 原始 PUBLISH uuid 的反查, 见 Client.recordInboundID)。
+func (m *messageIDs) setID(id uint16, u uuid.UUID) {
+	m.Lock()
+	defer m.Unlock()
+	m.index[id] = &u
+}
