@@ -5,7 +5,7 @@
 </div>
 
 ### 一、项目简介
-- 使用 Go 实现的 **MQTT 3.1.1 / 5.0 代理核心**（broker library），可作为库集成，也附带独立服务器程序。
+- 使用 Go 实现的 **MQTT 3.1.1 代理核心**（broker library），可作为库集成，也附带独立服务器程序。
 - 支持 **TCP** 与 **WebSocket** 两种监听方式，可同时配置多个监听器。
 - 内置 **QoS 0/1/2** 消息处理、**遗嘱消息**（Will）、**保留消息**（Retained）、**主题通配符**（`+`、`#`）。
 - 提供默认的 **内存持久化**（`MemoryPersistence`），可通过 `Persistence` 接口扩展到 Redis / LevelDB 等外部存储。

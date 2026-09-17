@@ -5,7 +5,7 @@
 </div>
 
 ### 1. Introduction
-- An **MQTT 3.1.1 / 5.0 broker core** implemented in Go (broker library), usable as a library and shipped with a standalone server program.
+- An **MQTT 3.1.1 broker core** implemented in Go (broker library), usable as a library and shipped with a standalone server program.
 - Supports both **TCP** and **WebSocket** listeners, with multiple listeners configurable at the same time.
 - Built-in **QoS 0/1/2** message handling, **will messages** (Will), **retained messages** (Retained), and **topic wildcards** (`+`, `#`).
 - Provides default **in-memory persistence** (`MemoryPersistence`), extensible to external storage such as Redis / LevelDB via the `Persistence` interface.
