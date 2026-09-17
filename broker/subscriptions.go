@@ -57,6 +57,21 @@ func isValidTopicFilter(topic string) bool {
 	return true
 }
 
+// isValidTopicName 校验 MQTT 3.1.1 主题名(用于 PUBLISH/遗嘱): 非空、无空字符、
+// 且不含通配符 '#'/'+'(主题名与主题过滤器的关键区别)。主题名允许含 '/' 与空段。
+func isValidTopicName(topic string) bool {
+	if topic == "" || len(topic) > 65535 {
+		return false
+	}
+	if strings.ContainsRune(topic, '\u0000') {
+		return false
+	}
+	if strings.ContainsAny(topic, "#+") {
+		return false
+	}
+	return true
+}
+
 func (h *Hrotti) RemoveSubscription(c *Client, topic string) bool {
 	h.DeleteSub(c.clientID, topic)
 	return true

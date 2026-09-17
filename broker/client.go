@@ -304,6 +304,16 @@ func (c *Client) Receive(hrotti *Hrotti) {
 					go c.Stop(true, hrotti)
 					return
 				}
+				// MQTT 3.1.1 §4.7.3: PUBLISH 主题名必须非空且不含通配符 '#'/'+',
+				// 违规则断开连接(与 QoS=3 处理一致)。旧实现透传非法主题名: 含
+				// 控制字符拼进日志可注入伪造行(与 2487 client ID 同源), 含通配符
+				// 的保留消息污染 retained map 且永不匹配正常订阅。校验先于任何
+				// 日志打印, 避免非法 topic 进入日志。
+				if !isValidTopicName(pp.TopicName) {
+					ERROR.Println("Received PUBLISH with invalid topic name from", c.clientID)
+					go c.Stop(true, hrotti)
+					return
+				}
 				PROTOCOL.Println("Received PUBLISH from", c.clientID, pp.TopicName)
 				if pp.Qos > 0 {
 					hrotti.PersistStore.Add(c.clientID, INBOUND, pp)

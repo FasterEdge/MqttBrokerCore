@@ -2,6 +2,7 @@ package hrotti
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -47,5 +48,26 @@ func TestAddSubscriptionValidation(t *testing.T) {
 		if rq := h.AddSubscription(c, []string{bad}, []byte{0}); rq[0] != 0x80 {
 			t.Fatalf("invalid topic filter %q not rejected: %v", bad, rq)
 		}
+	}
+}
+
+func TestIsValidTopicName(t *testing.T) {
+	// 合法主题名: 允许 '/', 允许空段(规范不禁止), 允许 $SYS
+	for _, ok := range []string{"a/b", "a//b", "sensor/1", "$SYS/broker/uptime", "a b/c"} {
+		if !isValidTopicName(ok) {
+			t.Fatalf("valid topic name %q rejected", ok)
+		}
+	}
+	// 非法主题名: 空 / 通配符 / 空字符
+	for _, bad := range []string{"", "#", "+", "a/#", "a/+", "a#", "a+b", "#/a", "+/a"} {
+		if isValidTopicName(bad) {
+			t.Fatalf("invalid topic name %q accepted", bad)
+		}
+	}
+	if isValidTopicName("a\x00b") {
+		t.Fatal("NUL-containing topic name accepted")
+	}
+	if isValidTopicName(strings.Repeat("a", 65536)) {
+		t.Fatal("over-long topic name accepted")
 	}
 }
