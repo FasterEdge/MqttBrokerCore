@@ -1,7 +1,11 @@
 // FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 package hrotti
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/FasterEdge/MqttBrokerCore/packets"
+)
 
 // Add a subscription for a client, taking an array of topics to subscribe to and an associated
 // slice of QoS values for the topics, return a slice of byte values indicating the granted
@@ -59,17 +63,9 @@ func isValidTopicFilter(topic string) bool {
 
 // isValidTopicName 校验 MQTT 3.1.1 主题名(用于 PUBLISH/遗嘱): 非空、无空字符、
 // 且不含通配符 '#'/'+'(主题名与主题过滤器的关键区别)。主题名允许含 '/' 与空段。
+// 实现集中在 packets.IsValidTopicName(connect.go WillTopic 与 client.go PUBLISH 共用)。
 func isValidTopicName(topic string) bool {
-	if topic == "" || len(topic) > 65535 {
-		return false
-	}
-	if strings.ContainsRune(topic, '\u0000') {
-		return false
-	}
-	if strings.ContainsAny(topic, "#+") {
-		return false
-	}
-	return true
+	return packets.IsValidTopicName(topic)
 }
 
 func (h *Hrotti) RemoveSubscription(c *Client, topic string) bool {

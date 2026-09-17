@@ -183,6 +183,43 @@ func TestConnectValidateClientID(t *testing.T) {
 	}
 }
 
+func TestConnectValidateWillTopic(t *testing.T) {
+	mk := func(topic string) *ConnectPacket {
+		return &ConnectPacket{ProtocolName: "MQTT", ProtocolVersion: 4, ClientIdentifier: "c", WillFlag: true, WillTopic: topic}
+	}
+	if rc := mk("a/b").Validate(); rc != CONN_ACCEPTED {
+		t.Fatalf("valid will topic rejected: rc=%d", rc)
+	}
+	// 主题名禁含通配符(与 PUBLISH 2529 同源)
+	if rc := mk("a/#").Validate(); rc != CONN_PROTOCOL_VIOLATION {
+		t.Fatalf("wildcard will topic accepted: rc=%d", rc)
+	}
+	if rc := mk("a/+").Validate(); rc != CONN_PROTOCOL_VIOLATION {
+		t.Fatalf("plus will topic accepted: rc=%d", rc)
+	}
+	// WillFlag=1 时 WillTopic 非空
+	if rc := mk("").Validate(); rc != CONN_PROTOCOL_VIOLATION {
+		t.Fatalf("empty will topic accepted: rc=%d", rc)
+	}
+	// 空字符
+	if rc := mk("a\x00b").Validate(); rc != CONN_PROTOCOL_VIOLATION {
+		t.Fatalf("NUL will topic accepted: rc=%d", rc)
+	}
+}
+
+func TestIsValidTopicName(t *testing.T) {
+	for _, ok := range []string{"a/b", "a//b", "$SYS/broker", "sensor 1/x"} {
+		if !IsValidTopicName(ok) {
+			t.Fatalf("valid topic name %q rejected", ok)
+		}
+	}
+	for _, bad := range []string{"", "#", "+", "a/#", "a/+", "a#", "a+b", "a\x00b"} {
+		if IsValidTopicName(bad) {
+			t.Fatalf("invalid topic name %q accepted", bad)
+		}
+	}
+}
+
 func TestUnsubscribePacketUnpack(t *testing.T) {
 	// 单 topic: UNSUBSCRIBE(10) flags=0x02(QoS1), RL=7, msgid=1, "a/b"
 	single := bytes.NewBuffer([]byte{0xA2, 7, 0, 1, 0, 3, 'a', '/', 'b'})

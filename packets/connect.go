@@ -103,6 +103,13 @@ func (c *ConnectPacket) Validate() byte {
 		fmt.Println("Will QoS reserved value 3")
 		return CONN_PROTOCOL_VIOLATION
 	}
+	// MQTT 3.1.1 §3.1.3.3/§4.7.3: WillFlag=1 时 WillTopic 必须为合法主题名
+	// (非空、无通配符、无空字符)。遗嘱消息在客户端异常断开时投递, 非法主题
+	// 名污染日志/保留消息(与 2529 PUBLISH 主题名同源)。
+	if c.WillFlag && !IsValidTopicName(c.WillTopic) {
+		fmt.Println("Bad will topic")
+		return CONN_PROTOCOL_VIOLATION
+	}
 	// MQTT 3.1.1 §3.1.2.3: if WillFlag is 0, WillQoS MUST be 0 and WillRetain MUST be 0.
 	if !c.WillFlag {
 		if c.WillQos != 0 {
