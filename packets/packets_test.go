@@ -182,3 +182,24 @@ func TestConnectValidateClientID(t *testing.T) {
 		t.Fatalf("empty client id rejected at packets layer: rc=%d", rc)
 	}
 }
+
+func TestUnsubscribePacketUnpack(t *testing.T) {
+	// 单 topic: UNSUBSCRIBE(10) flags=0x02(QoS1), RL=7, msgid=1, "a/b"
+	single := bytes.NewBuffer([]byte{0xA2, 7, 0, 1, 0, 3, 'a', '/', 'b'})
+	sp, err := ReadPacket(single)
+	if err != nil {
+		t.Fatalf("single-topic UNSUBSCRIBE rejected: %v", err)
+	}
+	if up := sp.(*UnsubscribePacket); len(up.Topics) != 1 || up.Topics[0] != "a/b" {
+		t.Fatalf("single topics = %v", up.Topics)
+	}
+	// 双 topic: RL=12, "a/b" + "c/d"(MQTT 3.1.1 §3.10.3 允许多个 filter)
+	double := bytes.NewBuffer([]byte{0xA2, 12, 0, 1, 0, 3, 'a', '/', 'b', 0, 3, 'c', '/', 'd'})
+	dp, err := ReadPacket(double)
+	if err != nil {
+		t.Fatalf("double-topic UNSUBSCRIBE rejected: %v", err)
+	}
+	if up := dp.(*UnsubscribePacket); len(up.Topics) != 2 || up.Topics[0] != "a/b" || up.Topics[1] != "c/d" {
+		t.Fatalf("double topics = %v", up.Topics)
+	}
+}

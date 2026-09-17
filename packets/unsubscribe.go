@@ -40,9 +40,15 @@ func (u *UnsubscribePacket) Write(w io.Writer) error {
 
 func (u *UnsubscribePacket) Unpack(b io.Reader) {
 	u.MessageID = decodeUint16(b)
-	var topic string
-	for topic = decodeString(b); topic != ""; topic = decodeString(b) {
+	// 循环边界按 RemainingLength 递减(与 SubscribePacket.Unpack 一致):
+	// MQTT 3.1.1 §3.10.3 payload 无空字符串结束符, 旧实现以 topic != "" 为界——
+	// 正常单 topic 的 UNSUBSCRIBE 读超 body 被 decodeReader 记录 truncated,
+	// ReadPacket 整体拒绝(功能损坏)。
+	payloadLength := u.FixedHeader.RemainingLength - 2
+	for payloadLength > 0 {
+		topic := decodeString(b)
 		u.Topics = append(u.Topics, topic)
+		payloadLength -= 2 + len(topic)
 	}
 }
 

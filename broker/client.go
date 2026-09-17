@@ -387,7 +387,11 @@ func (c *Client) Receive(hrotti *Hrotti) {
 			case *UnsubscribePacket:
 				PROTOCOL.Println("Received UNSUBSCRIBE from", c.clientID)
 				up := cp.(*UnsubscribePacket)
-				hrotti.RemoveSubscription(c, up.Topics[0])
+				// MQTT 3.1.1 §3.10.3 允许多个 topic filter——旧实现只删
+				// up.Topics[0], 其余主题过滤器的订阅残留(退订不完整)。
+				for _, t := range up.Topics {
+					hrotti.RemoveSubscription(c, t)
+				}
 				ua := NewControlPacket(UNSUBACK).(*UnsubackPacket)
 				ua.MessageID = up.MessageID
 				select {
