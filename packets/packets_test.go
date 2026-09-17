@@ -157,3 +157,28 @@ func TestConnectPacket(t *testing.T) {
 		t.Errorf("Connect Packet WillMessage is %s, should be %s", string(cp.WillMessage), "Test Payload")
 	}
 }
+
+func TestConnectValidateClientID(t *testing.T) {
+	mk := func(id string) *ConnectPacket {
+		return &ConnectPacket{ProtocolName: "MQTT", ProtocolVersion: 4, ClientIdentifier: id}
+	}
+	if rc := mk("client-1").Validate(); rc != CONN_ACCEPTED {
+		t.Fatalf("valid client id rejected: rc=%d", rc)
+	}
+	// 控制字符(换行/ANSI 转义)可注入日志行——须拒绝。
+	if rc := mk("client\nid").Validate(); rc != CONN_REF_ID_REJ {
+		t.Fatalf("newline client id accepted: rc=%d", rc)
+	}
+	if rc := mk("client\x1b[31m").Validate(); rc != CONN_REF_ID_REJ {
+		t.Fatalf("ansi client id accepted: rc=%d", rc)
+	}
+	// 超长 client id 放大日志/持久化/订阅表——须拒绝(>128)。
+	long := string(bytes.Repeat([]byte("a"), 129))
+	if rc := mk(long).Validate(); rc != CONN_REF_ID_REJ {
+		t.Fatalf("overlong client id accepted: rc=%d", rc)
+	}
+	// 空 ID 在 packets 层放行,由 server 按 MQTT 3.1.1 §3.1.3.1 处理。
+	if rc := mk("").Validate(); rc != CONN_ACCEPTED {
+		t.Fatalf("empty client id rejected at packets layer: rc=%d", rc)
+	}
+}

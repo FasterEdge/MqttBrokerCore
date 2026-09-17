@@ -199,7 +199,18 @@ func (c *Client) Start(cp *ConnectPacket, hrotti *Hrotti) {
 	}
 }
 
+// validateclientID 校验 MQTT 客户端标识: 长度有上限、拒绝控制字符。
+// 该校验已统一在 packets.ConnectPacket.Validate()(CONN_REF_ID_REJ) 执行,
+// 此处保留同义实现以防未来绕过 packets 层直接构造 Client。旧实现恒 return true。
 func validateclientID(clientID string) bool {
+	if len(clientID) == 0 || len(clientID) > 128 {
+		return false
+	}
+	for _, r := range clientID {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
 	return true
 }
 

@@ -129,6 +129,22 @@ func (c *ConnectPacket) Validate() byte {
 		fmt.Println("Bad size field")
 		return CONN_PROTOCOL_VIOLATION
 	}
+	// 非空 client ID 拒绝控制字符(拼进日志/持久化可注入伪造行)与超长值(日志/
+	// 持久化/订阅表放大)。空 ID 由 server 按 MQTT 3.1.1 §3.1.3.1 处理(分配
+	// UUID 或拒绝), 故此处仅校验非空值。旧实现无字符集/长度校验(validateclientID
+	// 恒 return true 且无调用点)。
+	if len(c.ClientIdentifier) > 0 {
+		if len(c.ClientIdentifier) > 128 {
+			fmt.Println("Bad client id length")
+			return CONN_REF_ID_REJ
+		}
+		for _, r := range c.ClientIdentifier {
+			if r < 0x20 || r == 0x7f {
+				fmt.Println("Bad client id character")
+				return CONN_REF_ID_REJ
+			}
+		}
+	}
 	return CONN_ACCEPTED
 }
 
