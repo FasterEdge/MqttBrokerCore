@@ -220,7 +220,12 @@ func (h *Hrotti) DeliverMessage(topic string, message *PublishPacket) {
 		if client == nil {
 			// Client disappeared between match and delivery; persist for redelivery.
 			if subQos > 0 {
-				h.PersistStore.Add(cid, OUTBOUND, message)
+				// 持久化降级后的副本(与在线投递一致)而非原消息: 原消息 QoS 是
+				// 发布者 QoS, 重连重发应按订阅者降级 QoS, 否则 QoS 降级语义被破坏
+				// (订阅 QoS=1 的客户端重连后收到 QoS=2 的原始发布)。
+				deliveryMessage := message.Copy()
+				deliveryMessage.Qos = subQos
+				h.PersistStore.Add(cid, OUTBOUND, deliveryMessage)
 			}
 			continue
 		}
