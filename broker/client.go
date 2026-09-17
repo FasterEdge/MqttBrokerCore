@@ -236,6 +236,15 @@ func (c *Client) ResetTimer() {
 func (c *Client) Receive(hrotti *Hrotti) {
 	//part of the client waitgroup so call Done() when the function returns.
 	defer c.Done()
+	// 纵深防御: 单个客户端的畸形数据若触发 panic(如未来新增边界检查遗漏),
+	// 不应崩溃整个 broker 进程——recover 后断开并清理该客户端, 其余客户端
+	// 继续服务, 同时记录日志便于定位根因。
+	defer func() {
+		if r := recover(); r != nil {
+			ERROR.Println("panic in client receive, disconnecting", c.clientID, r)
+			c.Stop(true, hrotti)
+		}
+	}()
 	//loop forever...
 	for {
 		select {
