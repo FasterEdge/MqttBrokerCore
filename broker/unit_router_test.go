@@ -49,6 +49,11 @@ func TestAddSubscriptionValidation(t *testing.T) {
 			t.Fatalf("invalid topic filter %q not rejected: %v", bad, rq)
 		}
 	}
+	// 超长 topic filter(32 段)→ 0x80(超出订阅 bitmap 层数, 防越界 panic)
+	long := strings.Repeat("a/", 31) + "a"
+	if rq := h.AddSubscription(c, []string{long}, []byte{0}); rq[0] != 0x80 {
+		t.Fatalf("overlong topic filter accepted: %v", rq)
+	}
 }
 
 func TestIsValidTopicName(t *testing.T) {

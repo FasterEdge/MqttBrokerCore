@@ -41,6 +41,11 @@ func isValidTopicFilter(topic string) bool {
 		return false
 	}
 	segs := strings.Split(topic, "/")
+	// 段数上限: 订阅 bitmap(subBitmap)按 packets.MaxTopicSegments+1 层分配,
+	// 超出段数会在 AddSub 索引 subBitmap[i] 越界 panic(远程 DoS)。
+	if len(segs) > packets.MaxTopicSegments {
+		return false
+	}
 	for i, seg := range segs {
 		if seg == "" {
 			return false // 空段("a//b" 或前导/尾随 '/')

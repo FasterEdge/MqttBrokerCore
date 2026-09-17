@@ -21,7 +21,7 @@ func newSubMap() *subscriptionMap {
 	s := &subscriptionMap{}
 	s.subElements = make(map[string][]string)
 	s.subMap = make(map[string]map[string]byte)
-	s.subBitmap = make([]map[string]map[string]bool, 10)
+	s.subBitmap = make([]map[string]map[string]bool, MaxTopicSegments+1)
 	for i, _ := range s.subBitmap {
 		s.subBitmap[i] = make(map[string]map[string]bool)
 	}

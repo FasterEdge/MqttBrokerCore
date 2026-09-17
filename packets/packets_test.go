@@ -218,6 +218,13 @@ func TestIsValidTopicName(t *testing.T) {
 			t.Fatalf("invalid topic name %q accepted", bad)
 		}
 	}
+	// 段数上限: ≤31 段通过, 32 段拒绝(超出会在订阅 bitmap 越界 panic)
+	if !IsValidTopicName(string(bytes.Repeat([]byte("a/"), 30)) + "a") {
+		t.Fatal("31-segment topic rejected")
+	}
+	if IsValidTopicName(string(bytes.Repeat([]byte("a/"), 31)) + "a") {
+		t.Fatal("32-segment topic accepted")
+	}
 }
 
 func TestUnsubscribePacketUnpack(t *testing.T) {
