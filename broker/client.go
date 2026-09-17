@@ -314,6 +314,14 @@ func (c *Client) Receive(hrotti *Hrotti) {
 					go c.Stop(true, hrotti)
 					return
 				}
+				// MQTT 3.1.1 §2.3.1/§3.3.1.2: QoS>0 的 PUBLISH 必须带非 0 Packet
+				// Identifier, 违规则断开连接(MessageID=0 的 PUBACK/PUBREC 回显
+				// 打乱客户端 QoS 1/2 状态机)。
+				if pp.Qos > 0 && pp.MessageID == 0 {
+					ERROR.Println("Received PUBLISH with zero MessageID from", c.clientID)
+					go c.Stop(true, hrotti)
+					return
+				}
 				PROTOCOL.Println("Received PUBLISH from", c.clientID, pp.TopicName)
 				if pp.Qos > 0 {
 					hrotti.PersistStore.Add(c.clientID, INBOUND, pp)
@@ -382,8 +390,16 @@ func (c *Client) Receive(hrotti *Hrotti) {
 			//requested topics and QoS'. Create a new SUBACK message and put the granted QoS values in it
 			//and send back to the client.
 			case *SubscribePacket:
-				PROTOCOL.Println("Received SUBSCRIBE from", c.clientID)
 				sp := cp.(*SubscribePacket)
+				// MQTT 3.1.1 §2.3.1: SUBSCRIBE 的 Packet Identifier 必须非 0,
+				// 违规则断开连接(MessageID=0 的 SUBACK 回显会打乱客户端 QoS
+				// 状态机, 客户端误判丢包后重复订阅/重发)。
+				if sp.MessageID == 0 {
+					ERROR.Println("Received SUBSCRIBE with zero MessageID from", c.clientID)
+					go c.Stop(true, hrotti)
+					return
+				}
+				PROTOCOL.Println("Received SUBSCRIBE from", c.clientID)
 				rQos := hrotti.AddSubscription(c, sp.Topics, sp.Qoss)
 				sa := NewControlPacket(SUBACK).(*SubackPacket)
 				sa.MessageID = sp.MessageID
@@ -395,8 +411,15 @@ func (c *Client) Receive(hrotti *Hrotti) {
 				}
 			//The client wants to unsubscribe from a topic.
 			case *UnsubscribePacket:
-				PROTOCOL.Println("Received UNSUBSCRIBE from", c.clientID)
 				up := cp.(*UnsubscribePacket)
+				// MQTT 3.1.1 §2.3.1: UNSUBSCRIBE 的 Packet Identifier 必须非 0,
+				// 违规则断开连接(MessageID=0 的 UNSUBACK 回显打乱客户端状态机)。
+				if up.MessageID == 0 {
+					ERROR.Println("Received UNSUBSCRIBE with zero MessageID from", c.clientID)
+					go c.Stop(true, hrotti)
+					return
+				}
+				PROTOCOL.Println("Received UNSUBSCRIBE from", c.clientID)
 				// MQTT 3.1.1 §3.10.3 允许多个 topic filter——旧实现只删
 				// up.Topics[0], 其余主题过滤器的订阅残留(退订不完整)。
 				for _, t := range up.Topics {
