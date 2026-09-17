@@ -296,6 +296,14 @@ func (c *Client) Receive(hrotti *Hrotti) {
 			//client has sent us a PUBLISH message, unpack it persist (if QoS > 0) in the inbound store
 			case *PublishPacket:
 				pp := cp.(*PublishPacket)
+				// MQTT 3.1.1 §3.3.1.4: PUBLISH QoS=3 是保留值(协议违规), 必须
+				// 断开连接。旧实现接受并投递但 switch 无 QoS=3 case → 永不 ack,
+				// 客户端 dup 重发导致消息重复投递且协议状态机混乱。
+				if pp.Qos > 2 {
+					ERROR.Println("Received PUBLISH with reserved QoS 3 from", c.clientID)
+					go c.Stop(true, hrotti)
+					return
+				}
 				PROTOCOL.Println("Received PUBLISH from", c.clientID, pp.TopicName)
 				if pp.Qos > 0 {
 					hrotti.PersistStore.Add(c.clientID, INBOUND, pp)
