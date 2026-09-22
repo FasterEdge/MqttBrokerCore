@@ -21,8 +21,8 @@
 go mod tidy
 go build ./...
 
-# Start as a standalone server
-go run . -key mySecret
+# Start as a standalone server (defaults to tcp://0.0.0.0:1883; HROTTI_URL overrides it)
+go run .
 
 # Or start with a config file (multiple listeners / WebSocket)
 go run . -conf config.json
@@ -40,11 +40,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	hrotti "github.com/alsm/hrotti/broker"
+	hrotti "github.com/FasterEdge/MqttBrokerCore/broker"
 )
 
 func main() {
-	h := hrotti.NewHrotti(100)
+	h := hrotti.NewHrotti(100, &hrotti.MemoryPersistence{})
 	hrotti.INFO = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime)
 	h.AddListener("test", hrotti.NewListenerConfig("tcp://0.0.0.0:1883"))
 
@@ -59,10 +59,8 @@ func main() {
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `-key`   | (required) | Access password, used to authenticate the HTTP / MQTT management endpoints |
-| `-conf`  | (empty) | Path to a JSON config file; if empty, the `HROTTI_URL` environment variable is used (single listener) |
-| `-addr`  | `:1883` | Listening address in single-listener mode (only takes effect when `-conf` is not provided) |
-| `-log`   | `stdout`| Log output target: `stdout` / `stderr` / `discard` |
+| `-conf`  | (empty) | Path to a JSON config file; when provided, starts the listeners described in the config |
+| `HROTTI_URL` | `tcp://0.0.0.0:1883` | Single-listener address in `tcp://…` or `ws://…` form when `-conf` is not provided |
 
 ### 5. Config File (JSON Example)
 
@@ -90,7 +88,7 @@ func main() {
 
 | Scenario | Example | Description |
 |----------|---------|-------------|
-| Single-node local testing | `go run . -key test` | Listens on `0.0.0.0:1883` by default, using `test` for auth. |
+| Single-node local testing | `go run .` | Listens on `0.0.0.0:1883` by default (overridable via `HROTTI_URL`). |
 | Multiple listeners + WebSocket | `go run . -conf config.json` | Opens TCP and WS listeners simultaneously, sharing the same topic tree. |
 | Persistent sessions | `CleanSession=false` with the same `ClientIdentifier` | Unacknowledged QoS 1/2 messages and subscriptions are kept after reconnect. |
 

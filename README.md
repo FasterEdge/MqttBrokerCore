@@ -21,8 +21,8 @@
 go mod tidy
 go build ./...
 
-# 以独立服务器方式启动
-go run . -key mySecret
+# 以独立服务器方式启动（默认监听 tcp://0.0.0.0:1883，可用 HROTTI_URL 覆盖）
+go run .
 
 # 或使用配置文件启动（多监听 / WebSocket）
 go run . -conf config.json
@@ -40,11 +40,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	hrotti "github.com/alsm/hrotti/broker"
+	hrotti "github.com/FasterEdge/MqttBrokerCore/broker"
 )
 
 func main() {
-	h := hrotti.NewHrotti(100)
+	h := hrotti.NewHrotti(100, &hrotti.MemoryPersistence{})
 	hrotti.INFO = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime)
 	h.AddListener("test", hrotti.NewListenerConfig("tcp://0.0.0.0:1883"))
 
@@ -57,12 +57,10 @@ func main() {
 
 ### 四、启动参数
 
-| 参数      | 默认值 | 说明                                                       |
-|-----------|--------|------------------------------------------------------------|
-| `-key`    |（必填） | 访问密码，用于 HTTP / MQTT 管理接口鉴权                     |
-| `-conf`   |（空）   | JSON 配置文件路径；若为空则使用环境变量 `HROTTI_URL`（单监听）|
-| `-addr`   | `:1883` | 单监听模式下的监听地址（仅在未提供 `-conf` 时生效）           |
-| `-log`    | `stdout`| 日志输出目标：`stdout` / `stderr` / `discard`               |
+| 参数       | 默认值 | 说明                                                      |
+|------------|--------|-----------------------------------------------------------|
+| `-conf`    | 空     | JSON 配置文件路径；提供后按配置启动多个 TCP / WebSocket 监听器 |
+| `HROTTI_URL` | `tcp://0.0.0.0:1883` | 未提供 `-conf` 时的单监听地址，格式为 `tcp://…` 或 `ws://…` |
 
 ### 五、配置文件（JSON 示例）
 
@@ -90,7 +88,7 @@ func main() {
 
 | 场景            | 示例                                             | 说明                                       |
 |-----------------|--------------------------------------------------|--------------------------------------------|
-| 单节点本地测试   | `go run . -key test`                             | 默认监听 `0.0.0.0:1883`，使用 `test` 鉴权。 |
+| 单节点本地测试   | `go run .`                                       | 默认监听 `0.0.0.0:1883`（可通过 `HROTTI_URL` 覆盖）。 |
 | 多监听 + WebSocket | `go run . -conf config.json`                     | 同时开 TCP 与 WS 监听，共享同一主题树。     |
 | 持久化会话       | `CleanSession=false` 且使用相同 `ClientIdentifier` | 断线重连后保留未确认的 QoS 1/2 消息与订阅。 |
 
