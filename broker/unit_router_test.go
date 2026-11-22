@@ -33,7 +33,18 @@ func Test_AddSub_Bitmap(t *testing.T) {
 
 func TestAddSubscriptionValidation(t *testing.T) {
 	h := NewHrotti(10, &MemoryPersistence{})
-	c := &Client{clientID: "test"}
+	// 本用例考察的是"主题过滤器/QoS 合法性"这一层, 与访问控制无关;
+	// 因此显式为一个身份授权相应主题, 让 ACL 不干扰对合法性断言的观察。
+	// (ACL 本身的行为由 auth_test.go 覆盖。未配置 ACL 时 broker 处于
+	// fail-closed, 会让本用例的合法主题也一律回 0x80。)
+	if err := h.SetAuthConfig(&AuthConfig{AllowedCredentials: []Credentials{{
+		Username:  "tester",
+		Password:  "tester-pw",
+		SubTopics: []string{"a/b", "a/#", "a/+"},
+	}}}); err != nil {
+		t.Fatalf("SetAuthConfig: %v", err)
+	}
+	c := &Client{clientID: "test", identity: "tester"}
 
 	// 合法主题 + QoS 0/1/2 通过
 	if rq := h.AddSubscription(c, []string{"a/b", "a/#", "a/+"}, []byte{0, 1, 2}); rq[0] != 0 || rq[1] != 1 || rq[2] != 2 {

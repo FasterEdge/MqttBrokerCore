@@ -22,6 +22,10 @@ type Hrotti struct {
 	maxQueueDepth      int
 	clients            *clients
 	subs               *subscriptionMap
+	// auth 是 CONNECT 身份校验与主题级 ACL 的唯一裁决点。零值不可用,
+	// 必须经 NewAuthManager() 或 SetAuthManager() 注入; 未注入时
+	// InitClient 按 fail-closed 拒绝连接。
+	auth *AuthManager
 }
 
 type internalListener struct {
@@ -39,6 +43,7 @@ func NewHrotti(maxQueueDepth int, persistence Persistence) *Hrotti {
 		maxQueueDepth: maxQueueDepth,
 		clients:       newClients(),
 		subs:          newSubMap(),
+		auth:          NewAuthManager(),
 	}
 	//start the goroutine that generates internal message ids for when clients receive messages
 	//but are not connected.
@@ -50,6 +55,34 @@ func (h *Hrotti) getClient(id string) *Client {
 	h.clients.RLock()
 	defer h.clients.RUnlock()
 	return h.clients.list[id]
+}
+
+// SetAuthManager 替换访问控制管理器。传 nil 会把管理器置为 fail-closed
+// 空表(拒绝一切 CONNECT), 这是有意的: 想放开鉴权必须显式配置
+// AllowAnonymous 走 SetAuthConfig, 不能靠"不设置"隐式放开。
+func (h *Hrotti) SetAuthManager(a *AuthManager) {
+	if a == nil {
+		a = NewAuthManager()
+	}
+	h.auth = a
+}
+
+// SetAuthConfig 用一份 AuthConfig 配置(或覆盖)本 broker 的凭据表与 ACL。
+// 传 nil 或空 AllowedCredentials 会清空表并进入 fail-closed。
+func (h *Hrotti) SetAuthConfig(cfg *AuthConfig) error {
+	if h.auth == nil {
+		h.auth = NewAuthManager()
+	}
+	return h.auth.SetAuthConfig(cfg)
+}
+
+// AuthManager 返回本 broker 的访问控制管理器(便于运维/测试读取状态),
+// 不会因返回 nil 而使调用方 panic: NewHrotti 始终注入非 nil 实例。
+func (h *Hrotti) AuthManager() *AuthManager {
+	if h.auth == nil {
+		h.auth = NewAuthManager()
+	}
+	return h.auth
 }
 
 func (h *Hrotti) AddListener(name string, config *ListenerConfig) error {
@@ -226,9 +259,25 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 		conn.Close()
 		return
 	} else {
-		//Put up an INFO message with the client id and the address they're connecting from.
-		INFO.Println(ConnackReturnCodes[rc], cp.ClientIdentifier, conn.RemoteAddr())
+		// CONNECT 报文本身合规, 但此刻尚未鉴权, 不能记 "Connection
+		// Accepted"(会让日志显示"已接受"紧接着"拒绝"的误导性组合)。
+		DEBUG.Println("CONNECT validated for", cp.ClientIdentifier, conn.RemoteAddr())
 	}
+
+	// MQTT 3.1.1 §4.1/§4.2: 身份校验必须发生在任何会话状态(客户端表、
+	// 持久化、订阅表)被触碰之前, 否则未认证连接可以借"同 ClientID 重连"
+	// 接管他人的持久会话。凭据缺失/不符时回 CONN_REF_BAD_USER_PASS。
+	identity, ok := h.auth.Authenticate(cp.Username, cp.Password)
+	if !ok {
+		// 不区分"用户名不存在"与"密码错误", 统一 0x04, 避免账号枚举。
+		ca := NewControlPacket(CONNACK).(*ConnackPacket)
+		ca.ReturnCode = CONN_REF_BAD_USER_PASS
+		_ = ca.Write(conn)
+		ERROR.Println(ConnackReturnCodes[CONN_REF_BAD_USER_PASS], conn.RemoteAddr())
+		conn.Close()
+		return
+	}
+	INFO.Println("Authenticated", cp.ClientIdentifier, "as", identity, conn.RemoteAddr())
 
 	//check for a zero length client id and if it exists create one from the UUID library and return
 	//it on $SYS/session_identifier. MQTT 3.1.1 §3.1.3.1: when ClientIdentifier is empty the
@@ -269,11 +318,14 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 		c.conn = conn
 		//c.bufferedConn = bufferedConn
 		c.stop = make(chan struct{})
+		// 重连(含接管)也必须重新绑定身份: 若连接被新身份取走而沿用旧
+		// 身份的 ACL, 会出现"低权限客户端继承高权限订阅"的提权路径。
+		c.identity = identity
 		//start the client.
 		go c.Start(cp, h)
 	} else {
 		//This is a brand new client so create a NewClient and add to the clients map
-		c = newClient(conn, cp.ClientIdentifier, h.maxQueueDepth)
+		c = newClient(conn, cp.ClientIdentifier, identity, h.maxQueueDepth)
 		h.clients.list[cp.ClientIdentifier] = c
 		if sendSessionID {
 			go func() {

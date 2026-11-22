@@ -24,6 +24,15 @@ func (h *Hrotti) AddSubscription(c *Client, topics []string, qoss []byte) []byte
 			rQos[i] = 0x80
 			continue
 		}
+		// 主题级 ACL: 未授权订阅回 SUBACK 0x80, 与"非法主题过滤器"的
+		// 返回码完全一致, 客户端无法据此区分"被拒绝"与"写错了",
+		// 也就无法借 SUBACK 试探某主题是否存在/是否有人订阅。
+		if !h.auth.CanSubscribe(c.identity, topic) {
+			noteSubRejected()
+			ERROR.Println("SUBSCRIBE denied by ACL:", c.clientID, c.identity, topic)
+			rQos[i] = 0x80
+			continue
+		}
 		h.AddSub(c.clientID, topic, qoss[i])
 		rQos[i] = qoss[i]
 	}

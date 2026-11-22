@@ -3,6 +3,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/url"
@@ -15,18 +16,62 @@ type ListenerEntry struct {
 	URL string `json:"url"`
 }
 
+// AuthEntry 是配置文件中一条身份(用户名/密码 + 该身份被允许 pub/sub
+// 的主题过滤器)。字段名与 broker.Credentials 的 JSON tag 一致, 由
+// ParseConfig 直接解码为 broker.AuthConfig。
+type AuthEntry struct {
+	Username  string   `json:"username"`
+	Password  string   `json:"password"`
+	PubTopics []string `json:"pubTopics"`
+	SubTopics []string `json:"subTopics"`
+}
+
+// AuthSection 是配置文件的 "auth" 段。Allowed 与 AllowAnonymous 至少
+// 给出一个; 两者都缺省时 broker 进入 fail-closed 模式(拒绝一切连接),
+// 这是有意的——"忘了配鉴权"必须是连不上, 不能是人人都能连。
+type AuthSection struct {
+	Allowed        []AuthEntry `json:"allowed"`
+	AllowAnonymous bool        `json:"allowAnonymous"`
+}
+
 // Current configuration struct, maxQueueDepth sets the maximum number of unacknowledged mesages
 // for a client. Listeners is a slice of ListenerConfigs
 type BrokerConfig struct {
 	MaxQueueDepth   int                       `json:"maxQueueDepth"`
 	ListenerEntries map[string]*ListenerEntry `json:"listeners"`
 	Listeners       map[string]*ListenerConfig
+	Auth            AuthSection `json:"auth"`
 	Logging         struct {
 		Info     string `json:"info"`
 		Protocol string `json:"protocol"`
 		Errlog   string `json:"error"`
 		Debug    string `json:"debug"`
 	}
+}
+
+// AuthConfigured 报告配置文件是否显式声明了 auth 段。用于 main() 在
+// 无 auth 配置时打印醒目告警, 而不是静默跑成一个无鉴权 broker。
+func (c *BrokerConfig) AuthConfigured() bool {
+	return c.Auth.AllowAnonymous || len(c.Auth.Allowed) > 0
+}
+
+// ApplyAuth 把配置文件的 auth 段下发给 broker 的访问控制器。
+// 未配置时传入 nil → fail-closed。返回的 error 只来自配置本身非法
+// (重复用户名/空用户名/匿名与凭据混用), 此时必须终止启动。
+func (c *BrokerConfig) ApplyAuth(h *Hrotti) error {
+	if !c.AuthConfigured() {
+		return h.SetAuthConfig(nil)
+	}
+	cfg := &AuthConfig{AllowAnonymous: c.Auth.AllowAnonymous}
+	for _, e := range c.Auth.Allowed {
+		cfg.AllowedCredentials = append(cfg.AllowedCredentials, Credentials{
+			Username:  e.Username,
+			Password:  e.Password,
+			PubTopics: e.PubTopics,
+			SubTopics: e.SubTopics,
+		})
+	}
+	return h.SetAuthConfig(cfg)
 }
 
 var logTargets map[string]io.Writer = map[string]io.Writer{
@@ -63,6 +108,9 @@ func ParseConfig(confFile string, confVar *BrokerConfig) error {
 	if err != nil {
 		return err
 	}
+	// 不关闭句柄会让调用方(尤其是测试的 t.TempDir)无法删除配置文件,
+	// Windows 上表现为"进程仍在访问该文件"。旧实现泄漏该 fd。
+	defer file.Close()
 	decoder := json.NewDecoder(file)
 
 	err = decoder.Decode(confVar)
@@ -76,6 +124,34 @@ func ParseConfig(confFile string, confVar *BrokerConfig) error {
 			return err
 		}
 		confVar.Listeners[name] = &ListenerConfig{URL: url}
+	}
+	return nil
+}
+
+// validateAuthEntries 在解析后立刻校验 auth 段, 让配置错误在启动阶段
+// 暴露(而不是等到某个客户端连上来才被拒绝)。只做结构性检查: 用户名非空、
+// 密码非空、主题过滤器基本合法。真正的 ACL 裁决在 broker 内完成。
+func (c *BrokerConfig) validateAuthEntries() error {
+	if !c.AuthConfigured() {
+		return nil
+	}
+	seen := make(map[string]bool, len(c.Auth.Allowed))
+	for _, e := range c.Auth.Allowed {
+		if e.Username == "" {
+			return fmt.Errorf("auth: username must not be empty")
+		}
+		if e.Password == "" {
+			return fmt.Errorf("auth: password for %q must not be empty", e.Username)
+		}
+		if seen[e.Username] {
+			return fmt.Errorf("auth: duplicate username %q", e.Username)
+		}
+		seen[e.Username] = true
+		for _, t := range append(append([]string(nil), e.PubTopics...), e.SubTopics...) {
+			if t == "" {
+				return fmt.Errorf("auth: empty topic filter for %q", e.Username)
+			}
+		}
 	}
 	return nil
 }

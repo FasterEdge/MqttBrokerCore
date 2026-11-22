@@ -26,7 +26,11 @@ type Client struct {
 	// 时需按该 MessageID 精确删除 INBOUND 持久化的原始 PUBLISH(旧实现用回包自身
 	// uuid 删除 → 永不命中 → INBOUND 无限累积泄漏)。
 	inboundMessageIDs messageIDs
-	clientID         string
+	clientID          string
+	// identity 是 CONNECT 阶段通过鉴权后绑定的身份名, 用于主题级 ACL
+	// 裁决。空串表示未认证会话(直接构造的测试 Client 亦如此), 此时
+	// 一切 pub/sub 都会被拒绝。
+	identity         string
 	conn             net.Conn
 	keepAlive        uint16
 	state            State
@@ -41,10 +45,11 @@ type Client struct {
 	takeOver         bool
 }
 
-func newClient(conn net.Conn, clientID string, maxQDepth int) *Client {
+func newClient(conn net.Conn, clientID string, identity string, maxQDepth int) *Client {
 	return &Client{
 		conn:             conn,
 		clientID:         clientID,
+		identity:         identity,
 		stop:             make(chan struct{}),
 		resetTimer:       make(chan bool, 1),
 		outboundMessages: make(chan *PublishPacket, maxQDepth),
@@ -223,13 +228,23 @@ func validateclientID(clientID string) bool {
 }
 
 func (c *Client) ResetTimer() {
-	//If we're using keepalive on this client attempt to reset the timer, if the channel blocks it's because
-	//the timer is already being reset so we can safely drop the attempt here (the default case of the select)
+	//If we're using a keepalive on this client attempt to reset the timer, if the channel blocks it's because the
+	//timer is already being reset so we can safely drop the attempt here (the default case of the select)
 	if c.keepAlive > 0 {
 		select {
 		case c.resetTimer <- true:
 		default:
 		}
+	}
+}
+
+// sendControl 向客户端发一条控制包(SUBACK/UNSUBACK/PUBACK/PUBREC...),
+// 队列满时静默丢弃: 单个迟滞客户端不能拖死接收循环(与既有非阻塞
+// 发送模式一致)。
+func (c *Client) sendControl(msg ControlPacket) {
+	select {
+	case c.outboundPriority <- msg:
+	default:
 	}
 }
 
@@ -340,6 +355,25 @@ func (c *Client) Receive(hrotti *Hrotti) {
 					return
 				}
 				PROTOCOL.Println("Received PUBLISH from", c.clientID, pp.TopicName)
+				// 主题级 ACL: 未授权发布一律不下发、不入保留消息、不写
+				// INBOUND 持久化。对 QoS>0 仍按 MQTT 3.1.1 §4.5 的两种允许
+				// 做法之一处理: 正面确认(发 PUBACK/PUBREC)后丢弃, 使客户端
+				// 无法用"有没有 ack"或 ack 的时机判断主题是否存在/有谁订阅。
+				if !hrotti.auth.CanPublish(c.identity, pp.TopicName) {
+					notePubRejected()
+					ERROR.Println("PUBLISH denied by ACL:", c.clientID, c.identity, pp.TopicName)
+					switch pp.Qos {
+					case 1:
+						pa := NewControlPacket(PUBACK).(*PubackPacket)
+						pa.MessageID = pp.MessageID
+						c.sendControl(pa)
+					case 2:
+						pr := NewControlPacket(PUBREC).(*PubrecPacket)
+						pr.MessageID = pp.MessageID
+						c.sendControl(pr)
+					}
+					continue
+				}
 				if pp.Qos > 0 {
 					hrotti.PersistStore.Add(c.clientID, INBOUND, pp)
 					// 记录客户端 MessageID→uuid 反查, 供 PUBACK/PUBCOMP 时精确
