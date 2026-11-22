@@ -22,6 +22,9 @@ type Hrotti struct {
 	maxQueueDepth      int
 	clients            *clients
 	subs               *subscriptionMap
+	// stats 是本实例的运行期计数器。由 NewHrotti 初始化, 通过 Stats()
+	// 取快照。客户端表被移除时(cleanSession 断开)对应的连接计数递减。
+	stats *BrokerStats
 	// auth 是 CONNECT 身份校验与主题级 ACL 的唯一裁决点。零值不可用,
 	// 必须经 NewAuthManager() 或 SetAuthManager() 注入; 未注入时
 	// InitClient 按 fail-closed 拒绝连接。
@@ -37,18 +40,34 @@ type internalListener struct {
 }
 
 func NewHrotti(maxQueueDepth int, persistence Persistence) *Hrotti {
+	// 队列深度 <= 0 会让 newClient 建出无缓冲 channel, 所有投递被丢弃。
+	// 库调用方(以及不走配置文件的嵌入方)同样需要这个兜底, 故在此处统一,
+	// 而不是只在 main 的配置装载路径兜底。
+	if maxQueueDepth <= 0 {
+		maxQueueDepth = DefaultMaxQueueDepth
+	}
 	h := &Hrotti{
 		PersistStore:  persistence,
 		listeners:     make(map[string]*internalListener),
 		maxQueueDepth: maxQueueDepth,
 		clients:       newClients(),
 		subs:          newSubMap(),
+		stats:         newBrokerStats(),
 		auth:          NewAuthManager(),
 	}
 	//start the goroutine that generates internal message ids for when clients receive messages
 	//but are not connected.
 	h.PersistStore.Init()
 	return h
+}
+
+// Stats 返回运行期计数器的快照。对零值 Hrotti(直接 &Hrotti{} 构造)返回
+// 零值快照而不是 panic。
+func (h *Hrotti) Stats() StatsSnapshot {
+	if h == nil || h.stats == nil {
+		return StatsSnapshot{}
+	}
+	return h.stats.Snapshot()
 }
 
 func (h *Hrotti) getClient(id string) *Client {
@@ -279,6 +298,25 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 	}
 	INFO.Println("Authenticated", cp.ClientIdentifier, "as", identity, conn.RemoteAddr())
 
+	// 遗嘱 ACL: WillTopic 也要按本身份的 PubTopics 裁决。遗嘱在客户端
+	// 异常断开时由 client.Stop → DeliverMessage 直接投递, 不经过
+	// client.Receive 里的 PUBLISH ACL 检查(那是发布侧唯一的裁决点),
+	// 因此若不在此处拒绝, "WillTopic 越权"就是一条绕过全部发布 ACL
+	// 的通道: 连上时声明任意主题的遗嘱, 断线即由 broker 替身份发布。
+	// MQTT 3.1.1 没有专用于"遗嘱主题未授权"的 CONNACK 返回码, 这里按
+	// §3.2.2.3 的未授权语义回 0x05 CONN_REF_NOT_AUTH(客户端可据此知道
+	// 是自身权限不足而非格式问题)。
+	if cp.WillFlag && !h.auth.CanPublish(identity, cp.WillTopic) {
+		notePubRejected()
+		ERROR.Println("Will topic denied by ACL:", cp.ClientIdentifier, identity, cp.WillTopic)
+		ca := NewControlPacket(CONNACK).(*ConnackPacket)
+		ca.ReturnCode = CONN_REF_NOT_AUTH
+		_ = ca.Write(conn)
+		ERROR.Println(ConnackReturnCodes[CONN_REF_NOT_AUTH], conn.RemoteAddr())
+		conn.Close()
+		return
+	}
+
 	//check for a zero length client id and if it exists create one from the UUID library and return
 	//it on $SYS/session_identifier. MQTT 3.1.1 §3.1.3.1: when ClientIdentifier is empty the
 	//client MUST set CleanSession=1; otherwise the server MUST reject.
@@ -345,6 +383,11 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 		c.Add(1)
 		go c.Start(cp, h)
 	}
+	// 连接计数在会话真正建立后 +1: 此前 return 的路径(凭据错、遗嘱越权、
+	// 空 ClientID 且 CleanSession=0、报文不合规)都不进入计数。
+	if h.stats != nil {
+		h.stats.AddClient()
+	}
 	//finished with the clients hashmap
 	h.clients.Unlock()
 	//wait on the stop channel, we never actually send values down this channel but a closed channel with
@@ -352,4 +395,9 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 	<-c.stop
 	//call Done() on the client waitgroup.
 	c.Done()
+	// 会话结束: 递减在途连接数。无论正常 DISCONNECT、keepalive 超时还是
+	// 被接管, 这条路径都会走到, 因此计数不会只增不减。
+	if h.stats != nil {
+		h.stats.RemoveClient()
+	}
 }

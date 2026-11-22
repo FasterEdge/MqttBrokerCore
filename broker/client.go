@@ -125,6 +125,9 @@ func (c *Client) Stop(sendWill bool, hrotti *Hrotti) {
 			close(c.outboundPriority)
 			//If we've stopped in a situation where the will message should be sent, and there is a will
 			//message, then send it.
+			// 遗嘱的发布权限已在 CONNECT 阶段按本身的 PubTopics 裁决
+			// (server.InitClient 对 WillTopic 调 CanPublish, 越权直接拒绝
+			// 连接), 因此这里投递的是已授权主题, 不需要再次查 ACL。
 			if sendWill && c.willMessage != nil {
 				INFO.Println("Sending will message for", c.clientID)
 				go hrotti.DeliverMessage(c.willMessage.TopicName, c.willMessage)
@@ -373,6 +376,11 @@ func (c *Client) Receive(hrotti *Hrotti) {
 						c.sendControl(pr)
 					}
 					continue
+				}
+				// 入站发布计数: 放在 ACL 通过之后, 越权发布计入 GetAuthStats
+				// 的 PubRejected 而不计入 BrokerStats 的 PublishReceived。
+				if hrotti.stats != nil {
+					hrotti.stats.AddPublishReceived(len(pp.Payload))
 				}
 				if pp.Qos > 0 {
 					hrotti.PersistStore.Add(c.clientID, INBOUND, pp)

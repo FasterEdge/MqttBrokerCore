@@ -33,6 +33,11 @@ type ListenerConfig struct {
 	URL *url.URL
 }
 
+// DefaultMaxQueueDepth 是每个客户端出站队列的缺省深度。0 深度会让
+// make(chan T, 0) 造出无缓冲队列, 所有投递在 select 的 default 分支被丢弃。
+// NewHrotti 对 <= 0 的入参按此值兜底。
+const DefaultMaxQueueDepth = 100
+
 // NewListenerConfig returns a pointer to a ListenerConfig prepared to listen
 // on the URL specified as rawURL. The caller MUST check both the returned error
 // and the result: nil ListenerConfig on error. Callers that previously relied on

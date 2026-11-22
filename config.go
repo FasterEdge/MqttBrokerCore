@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/url"
 	"os"
 
 	. "github.com/FasterEdge/MqttBrokerCore/broker"
@@ -118,12 +117,29 @@ func ParseConfig(confFile string, confVar *BrokerConfig) error {
 		return err
 	}
 
+	// 监听器 URL 在装载阶段就校验 scheme: 旧实现只做 url.Parse,
+	// server.AddListener 恒 net.Listen("tcp", ...) 且只在 Scheme=="ws" 时
+	// 走 WebSocket 分支, 因此 "udp://0.0.0.0:1883" 会被静默开成 TCP 监听
+	// (配置说是 UDP, 实际是 TCP)。这里复用 NewListenerConfigWithError 的
+	// 校验逻辑, 让不支持的 scheme 在启动前就失败。
+	if confVar.Listeners == nil {
+		confVar.Listeners = make(map[string]*ListenerConfig)
+	}
 	for name, entry := range confVar.ListenerEntries {
-		url, err := url.Parse(entry.URL)
-		if err != nil {
-			return err
+		if entry == nil {
+			return fmt.Errorf("listener %q: missing url", name)
 		}
-		confVar.Listeners[name] = &ListenerConfig{URL: url}
+		lc, err := NewListenerConfigWithError(entry.URL)
+		if err != nil {
+			return fmt.Errorf("listener %q: %w", name, err)
+		}
+		confVar.Listeners[name] = lc
+	}
+
+	// maxQueueDepth 缺省(0)兜底: 0 会让 newClient 建出无缓冲 channel,
+	// 投递全部走 select 的 default 分支被丢弃。负值同样无意义, 一并兜底。
+	if confVar.MaxQueueDepth <= 0 {
+		confVar.MaxQueueDepth = DefaultMaxQueueDepth
 	}
 	return nil
 }

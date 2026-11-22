@@ -217,8 +217,13 @@ func (a *AuthManager) Enabled() bool {
 //   - 用户名不存在 / 密码不匹配 → ("", false), 计数 +1
 //   - 通过 → (凭据表中的用户名, true)
 //
-// 用户名不存在时也走一次等长的无效比较, 使"用户不存在"与"密码错误"在
-// 耗时上不可区分(否则可当账号枚举侧信道)。
+// 关于"抹平时序差"的实际边界(README 必须与此一致): 用户名不存在时确实
+// 会走一次对定长 31 字节串的常量时间比较, 让"查不到用户"这条路径也付出
+// 一次可观的比较代价; 但 crypto/subtle.ConstantTimeCompare 在长度不等时
+// 立即返回 false, 并不进入逐字节比较, 因此"用户不存在"与"密码长度恰好
+// 等于真实密码长度但内容错误"之间仍存在长度可区分的时序差异。账号枚举的
+// 主要防御是三种失败统一返回 0x04(返回码不可区分), 时序侧信道只被削弱
+// 而未被消除。
 func (a *AuthManager) Authenticate(username string, password []byte) (string, bool) {
 	if a == nil {
 		return "", false
@@ -234,7 +239,7 @@ func (a *AuthManager) Authenticate(username string, password []byte) (string, bo
 		return AnonymousIdentity, true
 	}
 	if !ok {
-		// dummy 比较只为抹平时序差, 结果有意丢弃。
+		// dummy 比较只为让"用户不存在"路径也付出一次比较代价, 结果有意丢弃。
 		_ = constantTimeEqual(password, []byte("dummy-password-for-timing-parity"))
 		atomic.AddInt64(&authCounters.unknownIdentity, 1)
 		atomic.AddInt64(&authCounters.connRejected, 1)
@@ -248,7 +253,8 @@ func (a *AuthManager) Authenticate(username string, password []byte) (string, bo
 }
 
 // constantTimeEqual 是 crypto/subtle.ConstantTimeCompare 的薄封装; 长度
-// 不等直接返回 false(不进逐字节比较, 也不泄露更长前缀)。
+// 不等直接返回 false(不进逐字节比较, 也不泄露更长前缀)。因此它抹平的
+// 是"等长但内容不同"的时序差, 而非任意长度下的耗时。
 func constantTimeEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false

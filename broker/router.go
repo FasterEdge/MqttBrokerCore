@@ -136,6 +136,7 @@ func (h *Hrotti) AddSub(client string, subscription string, qos byte) {
 		}
 		h.subs.subBitmap[i][element][subscription] = true
 	}
+	h.noteSubscribed()
 	go h.FindRetained(client, subscription, qos)
 }
 
@@ -143,6 +144,9 @@ func (h *Hrotti) DeleteSub(client string, subscription string) {
 	h.subs.Lock()
 	defer h.subs.Unlock()
 	if _, ok := h.subs.subMap[subscription]; ok {
+		if _, had := h.subs.subMap[subscription][client]; had {
+			h.noteUnsubscribed()
+		}
 		delete(h.subs.subMap[subscription], client)
 	}
 }
@@ -152,8 +156,37 @@ func (h *Hrotti) DeleteSubAll(client string) {
 	defer h.subs.Unlock()
 	for _, topic := range h.subs.subMap {
 		if _, ok := topic[client]; ok {
+			h.noteUnsubscribed()
 			delete(topic, client)
 		}
+	}
+}
+
+// noteSubscribed / noteUnsubscribed 维护订阅数计数(增/减)。nil 检查让
+// 直接 &Hrotti{} 构造的实例(零值)不会 panic。
+func (h *Hrotti) noteSubscribed() {
+	if h != nil && h.stats != nil {
+		h.stats.AddSubscription()
+	}
+}
+
+func (h *Hrotti) noteUnsubscribed() {
+	if h != nil && h.stats != nil {
+		h.stats.RemoveSubscription()
+	}
+}
+
+// noteSent / noteDropped 是投递侧计数的薄封装, 供 router 的入队点调用。
+// nil 检查是为了让直接 &Hrotti{} 构造的实例(零值)仍能安全投递。
+func (h *Hrotti) noteSent(payloadBytes int) {
+	if h != nil && h.stats != nil {
+		h.stats.AddPublishSent(payloadBytes)
+	}
+}
+
+func (h *Hrotti) noteDropped() {
+	if h != nil && h.stats != nil {
+		h.stats.AddPublishDropped()
 	}
 }
 
@@ -238,7 +271,9 @@ func (h *Hrotti) DeliverMessage(topic string, message *PublishPacket) {
 					h.PersistStore.Add(c.clientID, OUTBOUND, deliveryMessage)
 					select {
 					case c.outboundMessages <- deliveryMessage:
+						h.noteSent(len(deliveryMessage.Payload))
 					default:
+						h.noteDropped()
 					}
 				} else {
 					h.PersistStore.Add(c.clientID, OUTBOUND, deliveryMessage)
@@ -247,7 +282,9 @@ func (h *Hrotti) DeliverMessage(topic string, message *PublishPacket) {
 		} else if client.Connected() {
 			select {
 			case client.outboundMessages <- zeroCopy:
+				h.noteSent(len(zeroCopy.Payload))
 			default:
+				h.noteDropped()
 			}
 		}
 	}

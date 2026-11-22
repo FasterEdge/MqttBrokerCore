@@ -11,6 +11,11 @@ import (
 	. "github.com/FasterEdge/MqttBrokerCore/broker"
 )
 
+// Version 是本程序的版本号, 与仓库根目录 VERSION 文件保持一致
+// (1.0.20261123)。改动版本时两处必须同步。`--version` 输出该常量, 启动
+// 日志也会打印它, 使 VERSION 文件不再是无人引用的事实来源。
+const Version = "1.0.20261123"
+
 // resolveListener returns a listener for the HROTTI_URL environment variable,
 // falling back to the default tcp://0.0.0.0:1883 when the env var is empty or
 // unparsable. NewListenerConfig returns nil for empty/invalid URLs, so callers
@@ -25,8 +30,14 @@ func resolveListener() *ListenerConfig {
 
 func createConfig() BrokerConfig {
 	configFile := flag.String("conf", "", "A configuration file")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("MqttBrokerCore", Version)
+		os.Exit(0)
+	}
 
 	var config BrokerConfig
 	config.ListenerEntries = make(map[string]*ListenerEntry)
@@ -34,12 +45,16 @@ func createConfig() BrokerConfig {
 
 	if *configFile == "" {
 		config.Listeners["envconfig"] = resolveListener()
-		config.MaxQueueDepth = 100
+		config.MaxQueueDepth = DefaultMaxQueueDepth
 	} else {
 		fmt.Println("Reading config file", *configFile)
 		err := ParseConfig(*configFile, &config)
 		if err != nil {
-			os.Stderr.WriteString(fmt.Sprintf("%s\n", err.Error()))
+			// 配置装载失败必须终止启动: 旧实现只打印错误后继续, 带着
+			// 空 Listeners 跑成一个什么都不监听的 broker, 或(在 scheme
+			// 校验前)把 udp:// 静默开成 TCP。
+			os.Stderr.WriteString(fmt.Sprintf("failed to parse config %s: %s\n", *configFile, err.Error()))
+			os.Exit(2)
 		}
 		// auth 段结构性校验失败必须终止启动: 带着错的 ACL 跑起来等于
 		// 以为有访问控制实际没有。
@@ -60,6 +75,9 @@ func createConfig() BrokerConfig {
 
 func main() {
 	config := createConfig()
+	// 启动日志带版本号, 使 VERSION 文件有可核对的运行时出口(与 --version
+	// 输出同一常量, 不会各说各话)。
+	fmt.Println("MqttBrokerCore", Version, "starting")
 
 	//r := &RedisPersistence{Server: ":6379"}
 	r := &MemoryPersistence{}
