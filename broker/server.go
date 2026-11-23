@@ -366,17 +366,27 @@ func (h *Hrotti) InitClient(conn net.Conn) {
 		c = newClient(conn, cp.ClientIdentifier, identity, h.maxQueueDepth)
 		h.clients.list[cp.ClientIdentifier] = c
 		if sendSessionID {
-			go func() {
-				sessionIDPacket := NewControlPacket(PUBLISH).(*PublishPacket)
-				sessionIDPacket.TopicName = "$SYS/session_identifier"
-				sessionIDPacket.Payload = []byte(cp.ClientIdentifier)
-				sessionIDPacket.Qos = 1
-				// Non-blocking: drop if the queue is full; client will see the ID via CONNACK path if needed.
-				select {
-				case c.outboundMessages <- sessionIDPacket:
-				default:
-				}
-			}()
+			// $SYS/session_identifier 也是一次发布: 它与 PUBLISH 报文和遗
+			// 嘱主题走同一套 ACL。若此处不裁决, 就是一个绕过全部发布 ACL
+			// 的通道——低权限身份连上即由 broker 代它向 $SYS 发布。
+			// 不通过就不发, 客户端仍可从 CONNACK 之后的常规路径得知自身
+			// ClientID(CONNECT 报文本就由它指定), 不影响协议可用性。
+			if !h.auth.CanPublish(identity, "$SYS/session_identifier") {
+				notePubRejected()
+				INFO.Println("session identifier suppressed by ACL:", cp.ClientIdentifier, identity)
+			} else {
+				go func() {
+					sessionIDPacket := NewControlPacket(PUBLISH).(*PublishPacket)
+					sessionIDPacket.TopicName = "$SYS/session_identifier"
+					sessionIDPacket.Payload = []byte(cp.ClientIdentifier)
+					sessionIDPacket.Qos = 1
+					// Non-blocking: drop if the queue is full; client will see the ID via CONNACK path if needed.
+					select {
+					case c.outboundMessages <- sessionIDPacket:
+					default:
+					}
+				}()
+			}
 		}
 		//As before this function has to remain running but to avoid races we want to make sure its finished
 		//before doing anything else so add it to the waitgroup so we can wait on it later

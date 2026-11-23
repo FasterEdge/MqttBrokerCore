@@ -198,6 +198,93 @@ func TestZeroValueHrottiStatsIsSafe(t *testing.T) {
 	h.noteUnsubscribed()
 }
 
+// ── $SYS/session_identifier 的发布 ACL ────────────────────
+//
+// 该发布由 InitClient 在会话建立后直接入队, 与 PUBLISH 报文、遗嘱主题
+// 并列构成"broker 代身份发布"的三条通道。历史上它未经任何 ACL 裁决,
+// 于是一个对 $SYS 毫无权限的身份连上即由 broker 代其向 $SYS 发布——
+// 与遗嘱主题越权同一类绕过。以下用例钉住"裁决真的接在发布路径上"。
+
+// sysFixture 在 aclFixture 之外补一个持有 $SYS/# 发布权的身份: 既要
+// 证明未授权身份被拒, 也要证明已授权身份照常收到, 缺任一侧都只能证明
+// "什么都不发", 证明不了"按 ACL 发"。
+func sysFixture() *AuthConfig {
+	return &AuthConfig{AllowedCredentials: []Credentials{
+		{
+			Username:  "plain",
+			Password:  "plain-pw",
+			PubTopics: []string{"only/here"},
+			SubTopics: []string{"only/here"},
+		},
+		{
+			Username:  "syspub",
+			Password:  "syspub-pw",
+			PubTopics: []string{"$SYS/#"},
+			SubTopics: []string{"$SYS/#"},
+		},
+	}}
+}
+
+// connectNoClientID 发一个 ClientIdentifier 为空的 CONNECT(MQTT 3.1.1
+// §3.1.3.1 要求此时 CleanSession=1), broker 会自行生成 UUID 并通过
+// $SYS/session_identifier 回给客户端, 这是该内部发布的唯一触发条件。
+func connectNoClientID(t *testing.T, addr, user string, pass []byte) net.Conn {
+	t.Helper()
+	conn, ca := dial(t, addr, connectPacket("", user, pass))
+	if ca.ReturnCode != CONN_ACCEPTED {
+		_ = conn.Close()
+		t.Fatalf("connect %q rejected: rc=0x%02x", user, ca.ReturnCode)
+	}
+	return conn
+}
+
+// TestSessionIdentifierPublishIsACLChecked 覆盖修复前的缺口: InitClient
+// 把 $SYS/session_identifier 塞进出站队列时没有过 CanPublish, 无 $SYS
+// 发布权(= 全部身份, 因为既有 ACL 夹具都不含 $SYS)也能让 broker 代其
+// 发布。修复后它按 PubTopics 裁决: 无权者收不到且计入 PubRejected,
+// 显式持有 $SYS/# 者必须照常收到(否则就是过度收紧)。
+func TestSessionIdentifierPublishIsACLChecked(t *testing.T) {
+	b := startTestBroker(t, sysFixture())
+	ResetAuthStatsForTest()
+
+	// 未授权身份: 空 ClientID 连接被接受(协议层合规), 但不得收到 $SYS 发布。
+	denied := connectNoClientID(t, b.addr, "plain", []byte("plain-pw"))
+	defer denied.Close()
+	if got := drainTopics(t, denied, 500*time.Millisecond); len(got) != 0 {
+		t.Fatalf("unauthorized identity received internal publish: %v", got)
+	}
+	if GetAuthStats().PubRejected == 0 {
+		t.Fatal("PubRejected not incremented for suppressed $SYS publish")
+	}
+
+	// 已授权身份: 同一条发布必须真的到达, 证明裁决不会误伤。
+	allowed := connectNoClientID(t, b.addr, "syspub", []byte("syspub-pw"))
+	defer allowed.Close()
+	seen := false
+	for _, topic := range drainTopics(t, allowed, 2*time.Second) {
+		if topic == "$SYS/session_identifier" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatal("authorized identity missed $SYS/session_identifier")
+	}
+
+	// 匿名模式(显式关闭访问控制)语义与 PUBLISH / 遗嘱一致: 放行。
+	anon := startTestBroker(t, &AuthConfig{AllowAnonymous: true})
+	anonConn := connectNoClientID(t, anon.addr, "", nil)
+	defer anonConn.Close()
+	anonSeen := false
+	for _, topic := range drainTopics(t, anonConn, 2*time.Second) {
+		if topic == "$SYS/session_identifier" {
+			anonSeen = true
+		}
+	}
+	if !anonSeen {
+		t.Fatal("anonymous mode suppressed $SYS/session_identifier")
+	}
+}
+
 func waitForStats(t *testing.T, h *Hrotti, cond func(StatsSnapshot) bool) StatsSnapshot {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

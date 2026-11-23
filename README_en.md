@@ -249,9 +249,9 @@ Publishes rejected by the ACL are **not** counted in `PublishReceived`; they onl
 | Dynamic topic filters (regex in ACL rules) | ACL rules are MQTT topic filters (`+` / `#`); no regex and no `${username}`-style templates |
 | User / ACL management API | Injected at startup via config file or `SetAuthConfig` only; no runtime add/remove-user interface |
 | Token authentication (JWT / OAuth2) | Static username + password credentials only |
-| Access control for `$SYS` topics | Internal publishes such as `$SYS/session_identifier` are not ACL-filtered — see the note below |
+| Access control for `$SYS` topics | Internal publishes such as `$SYS/session_identifier` are now decided by the identity's `pubTopics`; grant `$SYS/#` (or the exact topic) to receive them |
 
-> **Known caveat**: the broker's `$SYS/session_identifier` publish to clients with an empty `ClientIdentifier` is not ACL-filtered (it is queued directly by `InitClient` after the session is established). It only leaks the server-generated UUID and no other client's data; decide on the subscribe side as well if strictness is required.
+> **Note**: the `$SYS/session_identifier` publish the broker sends to clients with an empty `ClientIdentifier` goes through the same publish ACL (`CanPublish`) as PUBLISH packets and the will topic. Unauthorized identities still connect successfully (protocol compliance), but the publish is suppressed and counted in `PubRejected`; identities explicitly holding `$SYS/#` publish rights still receive it. The subscribe side remains independently decided by `subTopics`.
 
 ### 10. Security and Reliability Issues Fixed
 
@@ -266,6 +266,7 @@ Publishes rejected by the ACL are **not** counted in `PublishReceived`; they onl
 | **Listener scheme was unchecked: `udp://0.0.0.0:1883` was silently opened as a TCP listener** | `ParseConfig` reuses `NewListenerConfigWithError` and rejects any scheme other than `tcp`/`ws` at load time, aborting startup (exit status 2) |
 | **A config without `maxQueueDepth` fell back to the zero value → unbuffered queue → every delivery dropped** | `ParseConfig` and `NewHrotti` clamp `<= 0` to `DefaultMaxQueueDepth` (100); an explicit positive value is honoured |
 | **Will bypassed the publish ACL: `WillTopic` was only format-checked at CONNECT, and the delivery path never called `CanPublish`** | `WillTopic` is decided against the identity's `pubTopics` at CONNECT time; violations get `0x05 CONN_REF_NOT_AUTH` and the connection is closed |
+| **`$SYS/session_identifier` bypassed the publish ACL: `InitClient` queued it directly without calling `CanPublish`** | The topic is decided against the identity's `pubTopics` before queuing; unauthorised identities have the publish suppressed and counted in `PubRejected`; identities holding `$SYS/#` still receive it |
 | **`BrokerStats` was never instantiated, all fields were unexported with no accessors** | Wired into the connection / publish / delivery / drop / subscription paths; added `StatsSnapshot` and `(*Hrotti).Stats()` |
 | `getClient` returning nil caused nil pointer panics | Added nil guards in `FindRetained` / `DeliverMessage` |
 | Empty `ClientIdentifier` with `CleanSession=0` was not rejected | Return `CONN_REF_ID_REJ` per the MQTT spec |

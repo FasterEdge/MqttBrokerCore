@@ -245,9 +245,9 @@ fmt.Println(s.Subscriptions, s.UptimeSeconds)
 | 动态主题过滤器（ACL 规则内的正则） | ACL 规则即 MQTT 主题过滤器（`+` / `#`），不支持正则或 `${username}` 类模板 |
 | 用户/ACL 管理 API | 仅启动期通过配置文件或 `SetAuthConfig` 注入，无运行时增删用户的接口 |
 | 令牌鉴权（JWT / OAuth2） | 仅用户名+密码静态凭据 |
-| $SYS 主题的访问控制 | `$SYS/session_identifier` 等内部发布未纳入 ACL，见下条注意事项 |
+| $SYS 主题的访问控制 | `$SYS/session_identifier` 等内部发布已按身份 `pubTopics` 裁决；需授权 `$SYS/#`（或精确主题）才能收到 |
 
-> **已知注意点**：broker 向空 `ClientIdentifier` 的客户端投递 `$SYS/session_identifier` 的发布未经过 ACL 过滤（该发布由 `InitClient` 在会话建立后直接入队）。它只泄漏服务端生成的 UUID，不含其它客户端数据；若需严格化，应在订阅侧一并裁决。
+> **说明**：broker 向空 `ClientIdentifier` 的客户端投递的 `$SYS/session_identifier`，与 PUBLISH 报文、遗嘱主题走同一套发布 ACL（`CanPublish`）。无权身份连接照常成功（协议层合规），但该发布被抑制并计入 `PubRejected`；显式持有 `$SYS/#` 发布权的身份照常收到。订阅侧仍按 `subTopics` 独立裁决。
 
 ### 十、已修复的安全与可靠性问题
 
@@ -262,6 +262,7 @@ fmt.Println(s.Subscriptions, s.UptimeSeconds)
 | **监听器 scheme 未校验：`udp://0.0.0.0:1883` 被静默开成 TCP 监听** | `ParseConfig` 复用 `NewListenerConfigWithError`，配置装载阶段即拒绝 `tcp`/`ws` 以外的 scheme，并终止启动（退出码 2） |
 | **配置文件缺 `maxQueueDepth` 时取零值 → 无缓冲队列 → 全部投递被丢弃** | `ParseConfig` 与 `NewHrotti` 对 `<= 0` 兜底为 `DefaultMaxQueueDepth`（100），显式正数按给定值生效 |
 | **遗嘱绕过发布 ACL：`WillTopic` 仅在 CONNECT 校验格式，投递路径不过 `CanPublish`** | CONNECT 阶段按身份 `pubTopics` 裁决 `WillTopic`，越权回 `0x05 CONN_REF_NOT_AUTH` 并断开 |
+| **`$SYS/session_identifier` 绕过发布 ACL：`InitClient` 直接入队，未经 `CanPublish`** | 入队前按身份 `pubTopics` 裁决，无权则抑制该发布并计入 `PubRejected`；持有 `$SYS/#` 的身份照常收到 |
 | **`BrokerStats` 从未实例化、字段全小写无访问器** | 接入连接/收发布/投递/丢弃/订阅各路径，新增 `StatsSnapshot` 与 `(*Hrotti).Stats()` |
 | `getClient` 返回 nil 导致空指针 panic | 在 `FindRetained` / `DeliverMessage` 中加空值保护 |
 | 空 `ClientIdentifier` 且 `CleanSession=0` 未拒绝 | 按 MQTT 规范返回 `CONN_REF_ID_REJ` |
